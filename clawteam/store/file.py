@@ -1,16 +1,8 @@
-"""Task store for shared team task management.
+"""File-based task store: each task is a JSON file on disk."""
 
-This module re-exports from :mod:`clawteam.store` for backward compatibility.
-New code should import from ``clawteam.store`` directly.
-"""
+from __future__ import annotations
 
-import sys
-
-if sys.platform == "win32":
-    import msvcrt
-else:
-    import fcntl
-
+import fcntl
 import json
 import os
 import tempfile
@@ -19,22 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from clawteam.store.base import BaseTaskStore, TaskLockError
 from clawteam.team.models import TaskItem, TaskPriority, TaskStatus, get_data_dir
-# Lazy imports to avoid circular dependency:
-# store/base.py -> team/models.py -> team/__init__.py -> team/tasks.py -> store/base.py
-
-
-def __getattr__(name: str):
-    if name == "TaskStore":
-        from clawteam.store.file import FileTaskStore
-        return FileTaskStore
-    if name == "TaskLockError":
-        from clawteam.store.base import TaskLockError
-        return TaskLockError
-    if name == "BaseTaskStore":
-        from clawteam.store.base import BaseTaskStore
-        return BaseTaskStore
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _tasks_root(team_name: str) -> Path:
@@ -55,38 +33,25 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class TaskStore:
-    """File-based task store with dependency tracking.
+class FileTaskStore(BaseTaskStore):
+    """Task store backed by the local filesystem.
 
     Each task is stored as a separate JSON file:
     ``{data_dir}/tasks/{team}/task-{id}.json``
-    """
 
-    def __init__(self, team_name: str):
-        self.team_name = team_name
+    Concurrent access is serialised with ``fcntl.flock``.
+    """
 
     @contextmanager
     def _write_lock(self):
         lock_path = _tasks_lock_path(self.team_name)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="utf-8") as lock_file:
-            if sys.platform == "win32":
-                pos = lock_file.tell()
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-                lock_file.seek(pos)
-            else:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 yield
             finally:
-                if sys.platform == "win32":
-                    pos = lock_file.tell()
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-                    lock_file.seek(pos)
-                else:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def create(
         self,
@@ -107,7 +72,6 @@ class TaskStore:
             blocked_by=blocked_by or [],
             metadata=metadata or {},
         )
-        self._validate_blocked_by_unlocked(task.id, task.blocked_by)
         if task.blocked_by:
             task.status = TaskStatus.blocked
         with self._write_lock():
@@ -146,26 +110,23 @@ class TaskStore:
             if not task:
                 return None
 
-            # Lock logic when transitioning to in_progress
             if status == TaskStatus.in_progress:
                 self._acquire_lock(task, caller, force)
-                # Record when work actually started
                 if not task.started_at:
                     task.started_at = _now_iso()
 
-            # Clear lock when transitioning to completed or pending
             if status in (TaskStatus.completed, TaskStatus.pending):
                 task.locked_by = ""
                 task.locked_at = ""
 
-            # Compute duration when completing a task that has a start time
+            # duration tracking
             if status == TaskStatus.completed and task.started_at:
                 try:
                     start = datetime.fromisoformat(task.started_at)
                     duration_secs = (datetime.now(timezone.utc) - start).total_seconds()
                     task.metadata["duration_seconds"] = round(duration_secs, 2)
                 except (ValueError, TypeError):
-                    pass  # malformed timestamp, skip
+                    pass
 
             if status is not None:
                 task.status = status
@@ -182,14 +143,9 @@ class TaskStore:
                     if b not in task.blocks:
                         task.blocks.append(b)
             if add_blocked_by:
-                proposed_blocked_by = list(task.blocked_by)
                 for b in add_blocked_by:
-                    if b not in proposed_blocked_by:
-                        proposed_blocked_by.append(b)
-                self._validate_blocked_by_unlocked(task.id, proposed_blocked_by)
-                task.blocked_by = proposed_blocked_by
-                if task.blocked_by and task.status == TaskStatus.pending:
-                    task.status = TaskStatus.blocked
+                    if b not in task.blocked_by:
+                        task.blocked_by.append(b)
             if metadata:
                 task.metadata.update(metadata)
             task.updated_at = _now_iso()
@@ -201,27 +157,18 @@ class TaskStore:
             return task
 
     def _acquire_lock(self, task: TaskItem, caller: str, force: bool) -> None:
-        """Acquire lock on a task for the caller agent."""
         if task.locked_by and task.locked_by != caller and not force:
-            # Check if lock holder is still alive via spawn registry
             from clawteam.spawn.registry import is_agent_alive
             alive = is_agent_alive(self.team_name, task.locked_by)
             if alive is not False:
-                # Lock holder is alive or unknown — refuse
                 raise TaskLockError(
                     f"Task '{task.id}' is locked by '{task.locked_by}' "
                     f"(since {task.locked_at}). Use --force to override."
                 )
-            # Lock holder is dead — release and continue
-
         task.locked_by = caller or ""
         task.locked_at = _now_iso() if caller else ""
 
     def release_stale_locks(self) -> list[str]:
-        """Scan all tasks and release locks held by dead agents.
-
-        Returns list of task IDs whose locks were released.
-        """
         from clawteam.spawn.registry import is_agent_alive
 
         released = []
@@ -283,60 +230,6 @@ class TaskStore:
             }
             tasks.sort(key=lambda task: (priority_order.get(task.priority, 2), task.created_at, task.id))
         return tasks
-
-    def get_stats(self) -> dict[str, Any]:
-        """Aggregate task timing stats for this team.
-
-        Returns dict with total tasks, completed count, and avg duration
-        (only counting tasks that have duration_seconds in metadata).
-        """
-        tasks = self.list_tasks()
-        completed = [t for t in tasks if t.status == TaskStatus.completed]
-        durations = [
-            t.metadata["duration_seconds"]
-            for t in completed
-            if "duration_seconds" in t.metadata
-        ]
-        avg_duration = sum(durations) / len(durations) if durations else 0.0
-        return {
-            "total": len(tasks),
-            "completed": len(completed),
-            "in_progress": sum(1 for t in tasks if t.status == TaskStatus.in_progress),
-            "pending": sum(1 for t in tasks if t.status == TaskStatus.pending),
-            "blocked": sum(1 for t in tasks if t.status == TaskStatus.blocked),
-            "timed_completed": len(durations),
-            "avg_duration_seconds": round(avg_duration, 2),
-        }
-
-    def _validate_blocked_by_unlocked(self, task_id: str, blocked_by: list[str]) -> None:
-        if task_id in blocked_by:
-            raise ValueError(f"Task '{task_id}' cannot be blocked by itself")
-
-        graph: dict[str, list[str]] = {
-            task.id: list(task.blocked_by)
-            for task in self._list_tasks_unlocked()
-        }
-        graph[task_id] = list(blocked_by)
-
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def _visit(node: str) -> bool:
-            if node in visiting:
-                return True
-            if node in visited:
-                return False
-            visiting.add(node)
-            for dep in graph.get(node, []):
-                if dep in graph and _visit(dep):
-                    return True
-            visiting.remove(node)
-            visited.add(node)
-            return False
-
-        for node in graph:
-            if _visit(node):
-                raise ValueError("Task dependencies cannot contain cycles")
 
     def _save_unlocked(self, task: TaskItem) -> None:
         path = _task_path(self.team_name, task.id)
