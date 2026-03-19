@@ -17,3 +17,12 @@ artifacts/**
 logs/*
 artifacts/nic_porting_v2/orchestrator_checkpoint.json
 .gitnexus
+
+# Local runtime data and scratch artifacts
+.clawteam/costs/
+.clawteam/tasks/
+.clawteam/teams/
+.clawteam/workspaces/
+.playwright-mcp/
+/board-*.png
+/verify-*.png

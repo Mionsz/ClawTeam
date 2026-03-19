@@ -38,6 +38,9 @@ p2p = [
 redis = [
     "redis>=5.0.0,<6.0.0",
 ]
+plane = [
+    "httpx>=0.27.0,<1.0.0",
+]
 
 [project.scripts]
 clawteam = "clawteam.cli.commands:app"
