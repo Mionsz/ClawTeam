@@ -28,6 +28,9 @@ class TeamSnapshotCache:
             if entry and time.monotonic() - entry[0] < self.ttl_seconds:
                 return entry[1]
 
+        # Load outside the lock so one slow collector run does not block all
+        # other readers. Concurrent expiry can trigger duplicate refreshes, but
+        # this path only rebuilds an in-memory snapshot and the latest result wins.
         data = loader()
         loaded_at = time.monotonic()
         with self._lock:
