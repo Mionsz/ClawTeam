@@ -48,6 +48,8 @@ class ClawTeamConfig(BaseModel):
     gource_seconds_per_day: float = 0.5  # animation speed
     profiles: dict[str, AgentProfile] = Field(default_factory=dict)
     presets: dict[str, AgentPreset] = Field(default_factory=dict)
+    spawn_prompt_delay: float = 2.0  # fallback wait (seconds) if TUI ready-detection times out
+    spawn_ready_timeout: float = 30.0  # max seconds to poll for TUI readiness before fallback
 
 
 def config_path() -> Path:
@@ -92,6 +94,8 @@ def get_effective(key: str) -> tuple[str, str]:
         "gource_path": "CLAWTEAM_GOURCE_PATH",
         "gource_resolution": "CLAWTEAM_GOURCE_RESOLUTION",
         "gource_seconds_per_day": "CLAWTEAM_GOURCE_SECONDS_PER_DAY",
+        "spawn_prompt_delay": "CLAWTEAM_SPAWN_PROMPT_DELAY",
+        "spawn_ready_timeout": "CLAWTEAM_SPAWN_READY_TIMEOUT",
     }
     defaults = ClawTeamConfig()
     cfg = load_config()

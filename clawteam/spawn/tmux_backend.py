@@ -136,6 +136,60 @@ class TmuxBackend(SpawnBackend):
             return (
                 f"Error: agent command '{normalized_command[0]}' exited immediately after launch. "
                 "Verify the CLI works standalone before using it with clawteam spawn."
+        # Send the prompt as input to the interactive claude session
+        # (codex prompt is passed as positional arg above, so skip here)
+        if prompt:
+            from clawteam.config import load_config
+            cfg = load_config()
+
+        if prompt and _is_claude_command(command):
+            # Wait for TUI to be ready before pasting, with configurable fallback
+            _wait_for_tui_ready(target, timeout=cfg.spawn_ready_timeout, fallback_delay=cfg.spawn_prompt_delay)
+            # Write prompt to a temp file and use load-keys to avoid escaping issues
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False, prefix="clawteam-prompt-"
+            ) as f:
+                f.write(prompt)
+                tmp_path = f.name
+            # Use tmux load-buffer + paste-buffer to send multi-line prompt reliably
+            subprocess.run(
+                ["tmux", "load-buffer", "-b", f"prompt-{agent_name}", tmp_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            subprocess.run(
+                ["tmux", "paste-buffer", "-b", f"prompt-{agent_name}", "-t", target],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            # Claude interactive mode needs Enter twice after paste:
+            # first to confirm the pasted text, second to submit
+            time.sleep(0.5)
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, "Enter"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            time.sleep(0.3)
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, "Enter"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            # Clean up
+            subprocess.run(
+                ["tmux", "delete-buffer", "-b", f"prompt-{agent_name}"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            os.unlink(tmp_path)
+        elif prompt and not _is_codex_command(command):
+            # Non-claude/non-codex command: append prompt via send-keys
+            _wait_for_tui_ready(target, timeout=cfg.spawn_ready_timeout, fallback_delay=cfg.spawn_prompt_delay)
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, prompt, "Enter"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
 
         _confirm_workspace_trust_if_prompted(target, normalized_command)
@@ -263,6 +317,61 @@ def _confirm_workspace_trust_if_prompted(
     intact.
     """
     if not (is_claude_command(command) or is_codex_command(command) or is_gemini_command(command)):
+
+def _wait_for_tui_ready(
+    target: str,
+    timeout: float = 30.0,
+    fallback_delay: float = 2.0,
+    poll_interval: float = 0.5,
+) -> None:
+    """Poll the tmux pane until the TUI appears ready, then return.
+
+    Detects readiness by looking for box-drawing characters or common prompt
+    markers that all interactive AI CLIs render once their UI is live.
+    Falls back to a plain ``time.sleep(fallback_delay)`` if the timeout
+    expires without a match — same behaviour as the old hard-coded sleep.
+
+    Args:
+        target: tmux target string, e.g. ``clawteam-fund1:buffett-analyst``.
+        timeout: Maximum seconds to wait before falling back.
+        fallback_delay: Seconds to sleep when polling times out.
+        poll_interval: Seconds between each pane capture attempt.
+    """
+    # Unicode box-drawing characters rendered by common AI CLI TUIs:
+    #   Claude Code  → "╭", "│"
+    #   Kimi         → "┌", "│"
+    #   Qwen         → "╔", "║"
+    #   OpenCode     → "╭", "│"
+    # These are specific enough to avoid false-positives from plain shell
+    # prompts or error messages (which rarely contain box-drawing chars).
+    # "?" is intentionally excluded — it appears in shell error output and
+    # would cause a premature paste before the TUI is fully rendered.
+    ready_hints = ("╭", "╔", "┌", "│", "║", "✓")
+
+    # Brief initial pause so the shell has time to exec the AI CLI process
+    # before we start reading the pane (avoids matching shell init output).
+    time.sleep(0.5)
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = subprocess.run(
+            ["tmux", "capture-pane", "-t", target, "-p"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            content = result.stdout
+            if any(h in content for h in ready_hints):
+                return  # TUI is ready
+        time.sleep(poll_interval)
+
+    # Timeout reached — fall back to fixed delay so prompt is still sent
+    time.sleep(fallback_delay)
+
+
+def _is_claude_command(command: list[str]) -> bool:
+    """Check if the command is a claude CLI invocation."""
+    if not command:
         return False
 
     deadline = time.monotonic() + timeout_seconds
