@@ -1,10 +1,12 @@
 """Tests for clawteam.team.mailbox — MailboxManager send/receive/broadcast."""
 
+import fcntl
+import json
 from pathlib import Path
 
 from clawteam.team.mailbox import MailboxManager
 from clawteam.team.manager import TeamManager
-from clawteam.team.models import MessageType
+from clawteam.team.models import MessageType, get_data_dir
 from clawteam.transport.file import FileTransport
 
 
@@ -13,6 +15,16 @@ def _make_mailbox(team_name: str) -> MailboxManager:
     """Create a mailbox with an explicit FileTransport (skip env/config resolution)."""
     transport = FileTransport(team_name)
     return MailboxManager(team_name, transport=transport)
+
+
+def _inbox_path(team_name: str, agent_name: str) -> Path:
+    inbox = get_data_dir() / "teams" / team_name / "inboxes" / agent_name
+    inbox.mkdir(parents=True, exist_ok=True)
+    return inbox
+
+
+def _dead_letter_root(team_name: str, agent_name: str) -> Path:
+    return get_data_dir() / "teams" / team_name / "dead_letters" / agent_name
 
 
 class TestSendReceive:
@@ -170,6 +182,152 @@ class TestBroadcast:
         # no inboxes created, nothing to send to
         sent = mb.broadcast(from_agent="lonely", content="anyone?")
         assert sent == []
+
+
+class TestReceiveQuarantine:
+    def test_receive_quarantines_schema_invalid_message_and_returns_valid_message(self, team_name):
+        mb = _make_mailbox(team_name)
+        inbox = _inbox_path(team_name, "bob")
+
+        mb.send(from_agent="a", to="bob", content="good")
+        (inbox / "msg-invalid.json").write_text(
+            json.dumps({"type": "message"}), encoding="utf-8"
+        )
+
+        received = mb.receive("bob", limit=10)
+
+        assert [msg.content for msg in received] == ["good"]
+        assert list(inbox.glob("msg-*.json")) == []
+
+        dead_letters = _dead_letter_root(team_name, "bob")
+        assert dead_letters.exists()
+        assert len(list(dead_letters.glob("*.json"))) >= 1
+        assert len(list(dead_letters.glob("*.meta.json"))) >= 1
+
+    def test_receive_limit_preserves_current_file_budget_with_invalid_first(self, team_name):
+        mb = _make_mailbox(team_name)
+        inbox = _inbox_path(team_name, "bob")
+
+        (inbox / "msg-0001-invalid.json").write_text(
+            json.dumps({"type": "message"}), encoding="utf-8"
+        )
+        (inbox / "msg-0002-valid.json").write_text(
+            json.dumps(
+                {
+                    "type": "message",
+                    "from": "alice",
+                    "to": "bob",
+                    "content": "later",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        first = mb.receive("bob", limit=1)
+        second = mb.receive("bob", limit=1)
+
+        assert first == []
+        assert [msg.content for msg in second] == ["later"]
+        dead_letters = _dead_letter_root(team_name, "bob")
+        assert dead_letters.exists()
+
+    def test_peek_schema_invalid_message_does_not_quarantine_or_consume(self, team_name):
+        mb = _make_mailbox(team_name)
+        inbox = _inbox_path(team_name, "bob")
+
+        (inbox / "msg-invalid.json").write_text(
+            json.dumps({"type": "message"}), encoding="utf-8"
+        )
+
+        peeked = mb.peek("bob")
+
+        assert peeked == []
+        assert (inbox / "msg-invalid.json").exists()
+        assert not _dead_letter_root(team_name, "bob").exists()
+
+    def test_p2p_offline_fallback_receive_matches_file_quarantine_behavior(self, team_name):
+        from clawteam.transport.p2p import P2PTransport
+
+        transport = P2PTransport(team_name)
+        mb = MailboxManager(team_name, transport=transport)
+        inbox = _inbox_path(team_name, "bob")
+
+        mb.send(from_agent="a", to="bob", content="good")
+        (inbox / "msg-invalid.json").write_text(
+            json.dumps({"type": "message"}), encoding="utf-8"
+        )
+
+        received = mb.receive("bob", limit=10)
+
+        assert [msg.content for msg in received] == ["good"]
+        assert list(inbox.glob("msg-*.json")) == []
+        assert _dead_letter_root(team_name, "bob").exists()
+        transport.close()
+
+    def test_receive_recovers_preclaimed_consumed_message(self, team_name):
+        mb = _make_mailbox(team_name)
+        inbox = _inbox_path(team_name, "bob")
+
+        (inbox / "msg-0001-valid.json").write_text(
+            json.dumps(
+                {
+                    "type": "message",
+                    "from": "alice",
+                    "to": "bob",
+                    "content": "recovered",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (inbox / "msg-0001-valid.json").rename(inbox / "msg-0001-valid.consumed")
+
+        received = mb.receive("bob", limit=10)
+
+        assert [msg.content for msg in received] == ["recovered"]
+
+    def test_peek_count_includes_preclaimed_consumed_message(self, team_name):
+        mb = _make_mailbox(team_name)
+        inbox = _inbox_path(team_name, "bob")
+
+        (inbox / "msg-0001-valid.json").write_text(
+            json.dumps(
+                {
+                    "type": "message",
+                    "from": "alice",
+                    "to": "bob",
+                    "content": "recovered",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (inbox / "msg-0001-valid.json").rename(inbox / "msg-0001-valid.consumed")
+
+        assert mb.peek_count("bob") == 1
+
+    def test_receive_skips_locked_preclaimed_consumed_message(self, team_name):
+        mb = _make_mailbox(team_name)
+        inbox = _inbox_path(team_name, "bob")
+        consumed = inbox / "msg-0001-valid.consumed"
+
+        consumed.write_text(
+            json.dumps(
+                {
+                    "type": "message",
+                    "from": "alice",
+                    "to": "bob",
+                    "content": "locked",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with consumed.open("rb") as locked_file:
+            fcntl.flock(locked_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert mb.receive("bob", limit=10) == []
+            assert consumed.exists()
+
+        received = mb.receive("bob", limit=10)
+        assert [msg.content for msg in received] == ["locked"]
 
 
 class TestFileTransport:

@@ -8,6 +8,7 @@ import uuid
 
 from clawteam.team.models import MessageType, TeamMessage, get_data_dir
 from clawteam.transport.base import Transport
+from clawteam.transport.claimed import ClaimedMessage
 
 
 def _default_transport(team_name: str) -> Transport:
@@ -158,8 +159,23 @@ class MailboxManager:
                 continue
         return result
 
+    def _parse_claimed_messages(self, claimed: list[ClaimedMessage]) -> list[TeamMessage]:
+        result: list[TeamMessage] = []
+        for item in claimed:
+            try:
+                message = TeamMessage.model_validate(json.loads(item.data))
+            except Exception as exc:
+                item.quarantine(str(exc))
+                continue
+            item.ack()
+            result.append(message)
+        return result
+
     def receive(self, agent_name: str, limit: int = 10) -> list[TeamMessage]:
         """Receive and delete messages from an agent's inbox (FIFO)."""
+        claim_messages = getattr(self._transport, "claim_messages", None)
+        if callable(claim_messages):
+            return self._parse_claimed_messages(claim_messages(agent_name, limit))
         raw = self._transport.fetch(agent_name, limit=limit, consume=True)
         return self._parse_messages(raw)
 

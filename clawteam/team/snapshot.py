@@ -52,6 +52,19 @@ def _read_json_dir(directory: Path, pattern: str) -> list[dict]:
     return items
 
 
+def _read_inbox_messages(directory: Path) -> list[dict]:
+    if not directory.exists():
+        return []
+    items = []
+    for pattern in ("msg-*.json", "msg-*.consumed"):
+        for f in sorted(directory.glob(pattern)):
+            try:
+                items.append(json.loads(f.read_text("utf-8")))
+            except Exception:
+                continue
+    return items
+
+
 def _safe_snapshot_tag(tag: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", tag).strip("-._")
     return safe or "snapshot"
@@ -91,7 +104,7 @@ class SnapshotManager:
         if inbox_root.exists():
             for agent_dir in sorted(inbox_root.iterdir()):
                 if agent_dir.is_dir():
-                    msgs = _read_json_dir(agent_dir, "msg-*.json")
+                    msgs = _read_inbox_messages(agent_dir)
                     if msgs:
                         inboxes[agent_dir.name] = msgs
 

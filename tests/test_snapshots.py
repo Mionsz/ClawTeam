@@ -92,6 +92,42 @@ class TestSnapshotCreate:
         total_inbox = sum(len(v) for v in bundle["inboxes"].values())
         assert total_inbox >= 1
 
+    def test_snapshot_ignores_dead_letters_outside_inboxes(self, team_with_data):
+        team_dir = get_data_dir() / "teams" / team_with_data
+        dead_dir = team_dir / "dead_letters" / "leader"
+        dead_dir.mkdir(parents=True, exist_ok=True)
+        (dead_dir / "msg-dead.json").write_text("raw payload", encoding="utf-8")
+
+        meta = SnapshotManager(team_with_data).create()
+        path = _snapshots_root(team_with_data) / f"snap-{meta.id}.json"
+        bundle = json.loads(path.read_text("utf-8"))
+
+        assert "dead_letters" not in bundle
+        assert all("dead_letters" not in name for name in bundle["inboxes"].keys())
+
+    def test_snapshot_captures_preclaimed_consumed_inbox_messages(self, team_with_data):
+        team_dir = get_data_dir() / "teams" / team_with_data
+        inbox = team_dir / "inboxes" / "leader"
+        inbox.mkdir(parents=True, exist_ok=True)
+        (inbox / "msg-0001-valid.consumed").write_text(
+            json.dumps(
+                {
+                    "type": "message",
+                    "from": "leader",
+                    "to": "leader",
+                    "content": "recover me",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        meta = SnapshotManager(team_with_data).create()
+        path = _snapshots_root(team_with_data) / f"snap-{meta.id}.json"
+        bundle = json.loads(path.read_text("utf-8"))
+
+        total_inbox = sum(len(v) for v in bundle["inboxes"].values())
+        assert total_inbox >= 1
+
 
 class TestSnapshotList:
     def test_empty(self, team_name):
