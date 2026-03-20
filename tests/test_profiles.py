@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 from clawteam.cli.commands import app
@@ -85,3 +88,37 @@ def test_profile_cli_set_list_show_remove(tmp_path):
     result = runner.invoke(app, ["profile", "remove", "moonshot-kimi"], env=env)
     assert result.exit_code == 0
     assert "Removed profile 'moonshot-kimi'" in result.output
+
+
+def test_profile_doctor_claude_creates_state_file(tmp_path):
+    runner = CliRunner()
+    env = {
+        "HOME": str(tmp_path),
+        "CLAWTEAM_DATA_DIR": str(tmp_path / ".clawteam"),
+    }
+
+    result = runner.invoke(app, ["profile", "doctor", "claude"], env=env)
+
+    assert result.exit_code == 0
+    state = json.loads((Path(tmp_path) / ".claude.json").read_text(encoding="utf-8"))
+    assert state["hasCompletedOnboarding"] is True
+
+
+def test_profile_doctor_claude_updates_existing_state_file(tmp_path):
+    runner = CliRunner()
+    env = {
+        "HOME": str(tmp_path),
+        "CLAWTEAM_DATA_DIR": str(tmp_path / ".clawteam"),
+    }
+    state_path = Path(tmp_path) / ".claude.json"
+    state_path.write_text(
+        json.dumps({"theme": "dark", "hasCompletedOnboarding": False}),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["profile", "doctor", "claude"], env=env)
+
+    assert result.exit_code == 0
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["theme"] == "dark"
+    assert state["hasCompletedOnboarding"] is True

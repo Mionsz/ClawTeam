@@ -706,6 +706,51 @@ def profile_test(
         raise typer.Exit(1)
 
 
+@profile_app.command("doctor")
+def profile_doctor(
+    client: str = typer.Argument(..., help="Client to repair (currently: claude)"),
+):
+    """Repair client-specific local runtime state for profiles."""
+    normalized = client.strip().lower()
+    if normalized not in {"claude", "claude-code"}:
+        console.print(
+            f"[red]Unsupported profile doctor target '{client}'. Supported: claude[/red]"
+        )
+        raise typer.Exit(1)
+
+    claude_state_path = Path.home() / ".claude.json"
+    before_exists = claude_state_path.exists()
+    data: dict[str, object]
+    if before_exists:
+        try:
+            data = json.loads(claude_state_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
+            data = {}
+    else:
+        data = {}
+
+    data["hasCompletedOnboarding"] = True
+    claude_state_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    result = {
+        "client": "claude",
+        "path": str(claude_state_path),
+        "created": not before_exists,
+        "hasCompletedOnboarding": True,
+    }
+
+    def _human(d):
+        action = "Created" if d["created"] else "Updated"
+        console.print(
+            f"[green]OK[/green] {action} Claude state at '{d['path']}' "
+            "with hasCompletedOnboarding=true"
+        )
+
+    _output(result, _human)
+
+
 @config_app.command("health")
 def config_health():
     """Health check for the data directory (shared directory diagnostics)."""
