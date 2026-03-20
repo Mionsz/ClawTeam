@@ -6,7 +6,12 @@ import sys
 
 from clawteam.spawn.cli_env import build_spawn_path, resolve_clawteam_executable
 from clawteam.spawn.subprocess_backend import SubprocessBackend
-from clawteam.spawn.tmux_backend import TmuxBackend, _confirm_workspace_trust_if_prompted
+from clawteam.spawn.tmux_backend import (
+    TmuxBackend,
+    _confirm_workspace_trust_if_prompted,
+    _inject_prompt_via_buffer,
+    _wait_for_cli_ready,
+)
 
 
 class DummyProcess:
@@ -600,3 +605,250 @@ def test_resolve_clawteam_executable_accepts_relative_path_with_explicit_directo
 
     assert resolve_clawteam_executable() == str(relative_bin.resolve())
     assert build_spawn_path("/usr/bin:/bin").startswith(f"{relative_bin.parent.resolve()}:")
+
+
+# ---------------------------------------------------------------------------
+# _wait_for_cli_ready tests
+# ---------------------------------------------------------------------------
+
+
+class TestWaitForCliReady:
+    """Tests for the generic readiness poller."""
+
+    @staticmethod
+    def _fake_run_factory(outputs):
+        """Return a fake subprocess.run that yields successive pane contents."""
+        idx = {"n": 0}
+
+        class Result:
+            def __init__(self, stdout):
+                self.returncode = 0
+                self.stdout = stdout
+
+        def fake_run(args, **kwargs):
+            if args[:4] == ["tmux", "capture-pane", "-p", "-t"]:
+                text = outputs[min(idx["n"], len(outputs) - 1)]
+                idx["n"] += 1
+                return Result(stdout=text)
+            return Result(stdout="")
+
+        return fake_run
+
+    def test_detects_prompt_indicator(self, monkeypatch):
+        fake = self._fake_run_factory(["Loading...\n", "❯ \n"])
+        monkeypatch.setattr("clawteam.spawn.tmux_backend.subprocess.run", fake)
+        monkeypatch.setattr("clawteam.spawn.tmux_backend.time.sleep", lambda _: None)
+        monkeypatch.setattr("clawteam.spawn.tmux_backend.time.monotonic", iter(range(100)).__next__)
+
+        assert _wait_for_cli_ready("t:a", timeout_seconds=10) is True
+
+    def test_detects_content_stabilisation(self, monkeypatch):
+        stable = "Welcome to MyAgent v1\nReady.\n"
+        fake = self._fake_run_factory(["Booting...\n", stable, stable, stable])
+        monkeypatch.setattr("clawteam.spawn.tmux_backend.subprocess.run", fake)
+        monkeypatch.setattr("clawteam.spawn.tmux_backend.time.sleep", lambda _: None)
+        monkeypatch.setattr("clawteam.spawn.tmux_backend.time.monotonic", iter(range(100)).__next__)
+
+        assert _wait_for_cli_ready("t:a", timeout_seconds=10) is True
+
+    def test_times_out_on_empty_pane(self, monkeypatch):
+        fake = self._fake_run_factory(["", "", ""])
+        monkeypatch.setattr("clawteam.spawn.tmux_backend.subprocess.run", fake)
+        monkeypatch.setattr("clawteam.spawn.tmux_backend.time.sleep", lambda _: None)
+        counter = iter([0, 0.5, 1.0, 1.5, 2.0, 999])
+        monkeypatch.setattr("clawteam.spawn.tmux_backend.time.monotonic", lambda: next(counter))
+
+        assert _wait_for_cli_ready("t:a", timeout_seconds=2) is False
+
+
+# ---------------------------------------------------------------------------
+# _inject_prompt_via_buffer tests
+# ---------------------------------------------------------------------------
+
+
+def test_inject_prompt_via_buffer_uses_load_and_paste(monkeypatch, tmp_path):
+    run_calls: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(args, **kwargs):
+        run_calls.append(args)
+        return Result()
+
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.time.sleep", lambda _: None)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.tempfile.NamedTemporaryFile",
+                        lambda **kw: open(tmp_path / "prompt.txt", kw.get("mode", "w")))
+    # NamedTemporaryFile mock won't have .name → use real tempfile
+    monkeypatch.undo()  # just use real functions
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.time.sleep", lambda _: None)
+
+    _inject_prompt_via_buffer("sess:win", "worker1", "hello world")
+
+    cmds = [c[:3] for c in run_calls]
+    assert ["tmux", "load-buffer", "-b"] in cmds
+    assert ["tmux", "paste-buffer", "-b"] in cmds
+    assert ["tmux", "send-keys", "-t"] in cmds
+    assert ["tmux", "delete-buffer", "-b"] in cmds
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: qwen & opencode spawn via tmux backend
+# ---------------------------------------------------------------------------
+
+
+def _make_tmux_spawn_harness(monkeypatch, tmp_path, cli_name):
+    """Shared harness for tmux spawn tests of new CLIs."""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    clawteam_bin = tmp_path / "venv" / "bin" / "clawteam"
+    clawteam_bin.parent.mkdir(parents=True)
+    clawteam_bin.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(sys, "argv", [str(clawteam_bin)])
+
+    run_calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode=0, stdout=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(args, **kwargs):
+        run_calls.append(args)
+        if args[:3] == ["tmux", "has-session", "-t"]:
+            return Result(returncode=1)
+        if args[:3] == ["tmux", "list-panes", "-t"]:
+            return Result(returncode=0, stdout="9876\n")
+        return Result(returncode=0)
+
+    def fake_which(name, path=None):
+        if name == "tmux":
+            return "/usr/bin/tmux"
+        if name == cli_name:
+            return f"/usr/bin/{cli_name}"
+        return None
+
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.shutil.which", fake_which)
+    monkeypatch.setattr("clawteam.spawn.command_validation.shutil.which", fake_which)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.time.sleep", lambda *_: None)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.time.monotonic", lambda: 0)
+    monkeypatch.setattr("clawteam.spawn.registry.register_agent", lambda **_: None)
+
+    return run_calls
+
+
+def test_tmux_backend_qwen_skip_permissions_and_prompt(monkeypatch, tmp_path):
+    run_calls = _make_tmux_spawn_harness(monkeypatch, tmp_path, "qwen")
+
+    backend = TmuxBackend()
+    result = backend.spawn(
+        command=["qwen"],
+        agent_name="coder",
+        agent_id="agent-q",
+        agent_type="general-purpose",
+        team_name="demo-team",
+        prompt="refactor this",
+        cwd="/tmp/demo",
+        skip_permissions=True,
+    )
+
+    assert "spawned" in result
+    new_session = next(c for c in run_calls if c[:3] == ["tmux", "new-session", "-d"])
+    full_cmd = new_session[-1]
+    assert " qwen --dangerously-skip-permissions -p 'refactor this';" in full_cmd
+
+
+def test_tmux_backend_opencode_skip_permissions_and_prompt(monkeypatch, tmp_path):
+    run_calls = _make_tmux_spawn_harness(monkeypatch, tmp_path, "opencode")
+
+    backend = TmuxBackend()
+    result = backend.spawn(
+        command=["opencode"],
+        agent_name="coder",
+        agent_id="agent-o",
+        agent_type="general-purpose",
+        team_name="demo-team",
+        prompt="fix the bug",
+        cwd="/tmp/demo",
+        skip_permissions=True,
+    )
+
+    assert "spawned" in result
+    new_session = next(c for c in run_calls if c[:3] == ["tmux", "new-session", "-d"])
+    full_cmd = new_session[-1]
+    assert " opencode --yolo -p 'fix the bug';" in full_cmd
+
+
+def test_subprocess_backend_qwen_skip_permissions_and_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    clawteam_bin = tmp_path / "venv" / "bin" / "clawteam"
+    clawteam_bin.parent.mkdir(parents=True)
+    clawteam_bin.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(sys, "argv", [str(clawteam_bin)])
+
+    captured: dict[str, object] = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return DummyProcess()
+
+    monkeypatch.setattr(
+        "clawteam.spawn.command_validation.shutil.which",
+        lambda name, path=None: "/usr/bin/qwen" if name == "qwen" else None,
+    )
+    monkeypatch.setattr("clawteam.spawn.subprocess_backend.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("clawteam.spawn.registry.register_agent", lambda **_: None)
+
+    backend = SubprocessBackend()
+    backend.spawn(
+        command=["qwen"],
+        agent_name="coder",
+        agent_id="agent-q",
+        agent_type="general-purpose",
+        team_name="demo-team",
+        prompt="refactor this",
+        cwd="/tmp/demo",
+        skip_permissions=True,
+    )
+
+    assert "qwen --dangerously-skip-permissions -p 'refactor this'" in captured["cmd"]
+
+
+def test_subprocess_backend_opencode_skip_permissions_and_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    clawteam_bin = tmp_path / "venv" / "bin" / "clawteam"
+    clawteam_bin.parent.mkdir(parents=True)
+    clawteam_bin.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(sys, "argv", [str(clawteam_bin)])
+
+    captured: dict[str, object] = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return DummyProcess()
+
+    monkeypatch.setattr(
+        "clawteam.spawn.command_validation.shutil.which",
+        lambda name, path=None: "/usr/bin/opencode" if name == "opencode" else None,
+    )
+    monkeypatch.setattr("clawteam.spawn.subprocess_backend.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("clawteam.spawn.registry.register_agent", lambda **_: None)
+
+    backend = SubprocessBackend()
+    backend.spawn(
+        command=["opencode"],
+        agent_name="coder",
+        agent_id="agent-o",
+        agent_type="general-purpose",
+        team_name="demo-team",
+        prompt="fix the bug",
+        cwd="/tmp/demo",
+        skip_permissions=True,
+    )
+
+    assert "opencode --yolo -p 'fix the bug'" in captured["cmd"]

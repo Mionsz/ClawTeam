@@ -18,7 +18,7 @@ class PreparedCommand:
 
 
 class NativeCliAdapter:
-    """Adapter for direct CLI runtimes such as claude, codex, gemini, kimi, nanobot."""
+    """Adapter for direct CLI runtimes such as claude, codex, gemini, kimi, nanobot, qwen, opencode."""
 
     def prepare_command(
         self,
@@ -34,13 +34,15 @@ class NativeCliAdapter:
         post_launch_prompt = None
 
         if skip_permissions:
-            if is_claude_command(normalized_command):
+            if is_claude_command(normalized_command) or is_qwen_command(normalized_command):
                 final_command.append("--dangerously-skip-permissions")
             elif is_codex_command(normalized_command):
                 final_command.append("--dangerously-bypass-approvals-and-sandbox")
-            elif is_gemini_command(normalized_command):
-                final_command.append("--yolo")
-            elif is_kimi_command(normalized_command):
+            elif (
+                is_gemini_command(normalized_command)
+                or is_kimi_command(normalized_command)
+                or is_opencode_command(normalized_command)
+            ):
                 final_command.append("--yolo")
 
         if is_kimi_command(normalized_command):
@@ -98,6 +100,29 @@ def is_gemini_command(command: list[str]) -> bool:
 def is_kimi_command(command: list[str]) -> bool:
     """Check if the command is a Kimi CLI invocation."""
     return command_basename(command) == "kimi"
+
+
+def is_qwen_command(command: list[str]) -> bool:
+    """Check if the command is a Qwen Code CLI invocation."""
+    return command_basename(command) in ("qwen", "qwen-code")
+
+
+def is_opencode_command(command: list[str]) -> bool:
+    """Check if the command is an OpenCode CLI invocation."""
+    return command_basename(command) == "opencode"
+
+
+def is_interactive_cli(command: list[str]) -> bool:
+    """Check if the command is a known interactive AI coding CLI."""
+    return (
+        is_claude_command(command)
+        or is_codex_command(command)
+        or is_nanobot_command(command)
+        or is_gemini_command(command)
+        or is_kimi_command(command)
+        or is_qwen_command(command)
+        or is_opencode_command(command)
+    )
 
 
 def command_has_workspace_arg(command: list[str]) -> bool:
