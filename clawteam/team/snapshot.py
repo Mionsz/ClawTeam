@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import re
 import shutil
@@ -56,12 +57,27 @@ def _read_inbox_messages(directory: Path) -> list[dict]:
     if not directory.exists():
         return []
     items = []
-    for pattern in ("msg-*.json", "msg-*.consumed"):
-        for f in sorted(directory.glob(pattern)):
+    for f in sorted(directory.glob("msg-*.json")):
+        try:
+            items.append(json.loads(f.read_text("utf-8")))
+        except Exception:
+            continue
+    for f in sorted(directory.glob("msg-*.consumed")):
+        try:
+            handle = f.open("rb")
+        except Exception:
+            continue
+        try:
             try:
-                items.append(json.loads(f.read_text("utf-8")))
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                continue
+            try:
+                items.append(json.loads(handle.read().decode("utf-8")))
             except Exception:
                 continue
+        finally:
+            handle.close()
     return items
 
 

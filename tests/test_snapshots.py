@@ -1,5 +1,6 @@
 """Tests for clawteam.team.snapshot — team state checkpoint/restore."""
 
+import fcntl
 import json
 
 import pytest
@@ -127,6 +128,33 @@ class TestSnapshotCreate:
 
         total_inbox = sum(len(v) for v in bundle["inboxes"].values())
         assert total_inbox >= 1
+
+    def test_snapshot_skips_actively_locked_consumed_message(self, team_with_data):
+        team_dir = get_data_dir() / "teams" / team_with_data
+        inbox = team_dir / "inboxes" / "leader"
+        inbox.mkdir(parents=True, exist_ok=True)
+        consumed = inbox / "msg-0001-active.consumed"
+        consumed.write_text(
+            json.dumps(
+                {
+                    "type": "message",
+                    "from": "leader",
+                    "to": "leader",
+                    "content": "in flight",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with consumed.open("rb") as locked_file:
+            fcntl.flock(locked_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            meta = SnapshotManager(team_with_data).create()
+            path = _snapshots_root(team_with_data) / f"snap-{meta.id}.json"
+            bundle = json.loads(path.read_text("utf-8"))
+
+        inbox_messages = bundle["inboxes"].get("leader", [])
+        assert all(message.get("content") != "in flight" for message in inbox_messages)
 
 
 class TestSnapshotList:
