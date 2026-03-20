@@ -12,6 +12,33 @@ from clawteam.team.tasks import TaskStore
 class BoardCollector:
     """Aggregates team/task/inbox data into plain dicts."""
 
+    def collect_team_summary(self, team_name: str) -> dict:
+        """Collect only the lightweight summary needed for overview screens."""
+        config = TeamManager.get_team(team_name)
+        if not config:
+            raise ValueError(f"Team '{team_name}' not found")
+
+        mailbox = MailboxManager(team_name)
+        store = TaskStore(team_name)
+
+        total_inbox = 0
+        leader_name = ""
+        for member in config.members:
+            inbox_name = f"{member.user}_{member.name}" if member.user else member.name
+            total_inbox += mailbox.peek_count(inbox_name)
+            if member.agent_id == config.lead_agent_id:
+                leader_name = member.name
+
+        tasks_total = len(store.list_tasks())
+        return {
+            "name": config.name,
+            "description": config.description,
+            "leader": leader_name,
+            "members": len(config.members),
+            "tasks": tasks_total,
+            "pendingMessages": total_inbox,
+        }
+
     def collect_team(self, team_name: str) -> dict:
         """Collect full board data for a single team.
 
@@ -136,17 +163,7 @@ class BoardCollector:
         for meta in teams_meta:
             name = meta["name"]
             try:
-                data = self.collect_team(name)
-                total_inbox = sum(m["inboxCount"] for m in data["members"])
-                leader = data["team"].get("leaderName", "")
-                result.append({
-                    "name": name,
-                    "description": meta.get("description", ""),
-                    "leader": leader,
-                    "members": len(data["members"]),
-                    "tasks": data["taskSummary"]["total"],
-                    "pendingMessages": total_inbox,
-                })
+                result.append(self.collect_team_summary(name))
             except Exception:
                 result.append({
                     "name": name,

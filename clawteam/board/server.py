@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -12,12 +14,34 @@ from clawteam.board.collector import BoardCollector
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
+@dataclass
+class TeamSnapshotCache:
+    """Tiny TTL cache for full team snapshots shared across HTTP handlers."""
+
+    ttl_seconds: float
+    _entries: dict[str, tuple[float, dict]] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def get(self, team_name: str, loader) -> dict:
+        with self._lock:
+            entry = self._entries.get(team_name)
+            if entry and time.monotonic() - entry[0] < self.ttl_seconds:
+                return entry[1]
+
+        data = loader()
+        loaded_at = time.monotonic()
+        with self._lock:
+            self._entries[team_name] = (loaded_at, data)
+        return data
+
+
 class BoardHandler(BaseHTTPRequestHandler):
     """HTTP handler for the board Web UI."""
 
     collector: BoardCollector
     default_team: str = ""
     interval: float = 2.0
+    team_cache: TeamSnapshotCache
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -64,7 +88,7 @@ class BoardHandler(BaseHTTPRequestHandler):
 
     def _serve_team(self, team_name: str):
         try:
-            data = self.collector.collect_team(team_name)
+            data = self.team_cache.get(team_name, lambda: self.collector.collect_team(team_name))
             self._serve_json(data)
         except ValueError as e:
             body = json.dumps({"error": str(e)}).encode("utf-8")
@@ -84,7 +108,10 @@ class BoardHandler(BaseHTTPRequestHandler):
         try:
             while True:
                 try:
-                    data = self.collector.collect_team(team_name)
+                    data = self.team_cache.get(
+                        team_name,
+                        lambda: self.collector.collect_team(team_name),
+                    )
                 except ValueError as e:
                     data = {"error": str(e)}
                 payload = json.dumps(data, ensure_ascii=False)
@@ -112,6 +139,7 @@ def serve(
     BoardHandler.collector = collector
     BoardHandler.default_team = default_team
     BoardHandler.interval = interval
+    BoardHandler.team_cache = TeamSnapshotCache(ttl_seconds=interval)
 
     server = ThreadingHTTPServer((host, port), BoardHandler)
     try:
