@@ -98,6 +98,41 @@ def _parse_key_value_items(items: list[str], *, label: str) -> dict[str, str]:
     return parsed
 
 
+def _load_questionary():
+    """Import questionary lazily so non-TUI flows do not depend on it at runtime."""
+    try:
+        import questionary
+    except ImportError as exc:  # pragma: no cover - import error path is trivial
+        console.print(
+            "[red]Questionary is not installed. Reinstall ClawTeam with its default "
+            "dependencies to use `clawteam profile wizard`.[/red]"
+        )
+        raise typer.Exit(1) from exc
+    return questionary
+
+
+def _profile_wizard_style(questionary):
+    return questionary.Style(
+        [
+            ("qmark", "fg:#22c55e bold"),
+            ("question", "bold"),
+            ("answer", "fg:#38bdf8 bold"),
+            ("pointer", "fg:#f59e0b bold"),
+            ("highlighted", "fg:#f59e0b bold"),
+            ("selected", "fg:#22c55e"),
+            ("instruction", "fg:#94a3b8 italic"),
+        ]
+    )
+
+
+def _questionary_safe_ask(control):
+    answer = control.ask()
+    if answer is None:
+        console.print("[yellow]Cancelled.[/yellow]")
+        raise typer.Exit(1)
+    return answer
+
+
 # ============================================================================
 # Config Commands
 # ============================================================================
@@ -305,7 +340,9 @@ def preset_set_client(
     command: Optional[str] = typer.Option(None, "--command", help="Exact command string"),
     model: Optional[str] = typer.Option(None, "--model", help="Default model"),
     base_url: Optional[str] = typer.Option(None, "--base-url", help="Client-specific base URL override"),
+    base_url_env: Optional[str] = typer.Option(None, "--base-url-env", help="Destination env var for base URL injection"),
     api_key_env: Optional[str] = typer.Option(None, "--api-key-env", help="Client-specific source env var override"),
+    api_key_target_env: Optional[str] = typer.Option(None, "--api-key-target-env", help="Destination env var receiving the resolved API key"),
     env: list[str] = typer.Option(None, "--env", help="Static env assignment KEY=VALUE"),
     env_map: list[str] = typer.Option(None, "--env-map", help="Runtime env mapping DEST=SOURCE_ENV"),
     arg: list[str] = typer.Option(None, "--arg", help="Extra argument appended to the agent command"),
@@ -329,8 +366,12 @@ def preset_set_client(
         profile.model = model
     if base_url is not None:
         profile.base_url = base_url
+    if base_url_env is not None:
+        profile.base_url_env = base_url_env
     if api_key_env is not None:
         profile.api_key_env = api_key_env
+    if api_key_target_env is not None:
+        profile.api_key_target_env = api_key_target_env
     if env:
         profile.env = _parse_key_value_items(env, label="env")
     if env_map:
@@ -557,7 +598,11 @@ def profile_show(
         console.print(f"  Command: {' '.join(d.get('command', [])) or '(unset)'}")
         console.print(f"  Model: {d.get('model') or '(default)'}")
         console.print(f"  Base URL: {d.get('base_url') or '(default)'}")
+        if d.get("base_url_env"):
+            console.print(f"  Base URL target env: {d['base_url_env']}")
         console.print(f"  API key env: {d.get('api_key_env') or '(unset)'}")
+        if d.get("api_key_target_env"):
+            console.print(f"  API key target env: {d['api_key_target_env']}")
         console.print(f"  Description: {d.get('description') or ''}")
         if d.get("args"):
             console.print(f"  Extra args: {' '.join(d['args'])}")
@@ -581,7 +626,9 @@ def profile_set(
     command: Optional[str] = typer.Option(None, "--command", help="Exact command string (e.g. 'kimi --config-file ~/.kimi/config.toml')"),
     model: Optional[str] = typer.Option(None, "--model", help="Default model"),
     base_url: Optional[str] = typer.Option(None, "--base-url", help="Provider base URL"),
+    base_url_env: Optional[str] = typer.Option(None, "--base-url-env", help="Destination env var for base URL injection"),
     api_key_env: Optional[str] = typer.Option(None, "--api-key-env", help="Source env var holding the API key"),
+    api_key_target_env: Optional[str] = typer.Option(None, "--api-key-target-env", help="Destination env var receiving the resolved API key"),
     env: list[str] = typer.Option(None, "--env", help="Static env assignment KEY=VALUE"),
     env_map: list[str] = typer.Option(None, "--env-map", help="Runtime env mapping DEST=SOURCE_ENV"),
     arg: list[str] = typer.Option(None, "--arg", help="Extra argument appended to the agent command"),
@@ -603,8 +650,12 @@ def profile_set(
         profile.model = model
     if base_url is not None:
         profile.base_url = base_url
+    if base_url_env is not None:
+        profile.base_url_env = base_url_env
     if api_key_env is not None:
         profile.api_key_env = api_key_env
+    if api_key_target_env is not None:
+        profile.api_key_target_env = api_key_target_env
     if env:
         profile.env = _parse_key_value_items(env, label="env")
     if env_map:
@@ -704,6 +755,247 @@ def profile_test(
     _output(data, _human)
     if result.returncode != 0:
         raise typer.Exit(1)
+
+
+@profile_app.command("wizard")
+def profile_wizard():
+    """Launch an interactive TUI for creating profiles from providers or manually."""
+    from clawteam.config import AgentProfile
+    from clawteam.spawn.presets import generate_profile_from_preset, list_presets, preset_clients
+    from clawteam.spawn.profiles import list_profiles, save_profile
+
+    questionary = _load_questionary()
+    style = _profile_wizard_style(questionary)
+    clients = [
+        questionary.Choice("Claude Code", "claude"),
+        questionary.Choice("Codex", "codex"),
+        questionary.Choice("Gemini CLI", "gemini"),
+        questionary.Choice("Kimi CLI", "kimi"),
+        questionary.Choice("Nanobot", "nanobot"),
+    ]
+    preset_catalog = list_presets()
+
+    console.print("[bold cyan]ClawTeam Profile Wizard[/bold cyan]")
+    setup_mode = _questionary_safe_ask(
+        questionary.select(
+            "Choose a setup mode",
+            choices=[
+                questionary.Choice("Quick setup", "quick"),
+                questionary.Choice("Advanced setup", "advanced"),
+            ],
+            style=style,
+        )
+    )
+    client = _questionary_safe_ask(
+        questionary.select(
+            "Choose a client",
+            choices=clients,
+            style=style,
+        )
+    )
+
+    provider_choices = []
+    for preset_name, (preset, source) in sorted(preset_catalog.items()):
+        if client in preset_clients(preset):
+            description = preset.description or "Recommended provider setup"
+            provider_choices.append(
+                questionary.Choice(
+                    title=f"{preset_name}  [{source}]  {description}",
+                    value=preset_name,
+                )
+            )
+    provider_choices.append(
+        questionary.Choice("Custom endpoint / manual configuration", "__custom__")
+    )
+    provider_name = _questionary_safe_ask(
+        questionary.select(
+            "Choose a provider template",
+            choices=provider_choices,
+            style=style,
+        )
+    )
+
+    if provider_name == "__custom__":
+        suggested_name = f"{client}-custom"
+        profile = AgentProfile(agent=client, description=f"Custom {client} profile")
+    else:
+        suggested_name = f"{client}-{provider_name}"
+        _, profile = generate_profile_from_preset(provider_name, client, name=suggested_name)
+
+    profile_name = _questionary_safe_ask(
+        questionary.text(
+            "Profile name",
+            default=suggested_name,
+            style=style,
+        )
+    )
+
+    profile = profile.model_copy(deep=True)
+    quick_known_provider = setup_mode == "quick" and provider_name != "__custom__"
+    edit_recommended_settings = setup_mode == "advanced" or provider_name == "__custom__"
+
+    if quick_known_provider:
+        console.print(
+            f"[dim]Using recommended settings from provider template '{provider_name}'.[/dim]"
+        )
+        edit_recommended_settings = _questionary_safe_ask(
+            questionary.confirm(
+                "Edit recommended model / endpoint / auth settings?",
+                default=False,
+                style=style,
+            )
+        )
+
+    if not quick_known_provider or edit_recommended_settings:
+        profile.description = _questionary_safe_ask(
+            questionary.text(
+                "Description",
+                default=profile.description,
+                style=style,
+            )
+        )
+        profile.model = _questionary_safe_ask(
+            questionary.text(
+                "Default model",
+                default=profile.model,
+                style=style,
+            )
+        )
+        profile.base_url = _questionary_safe_ask(
+            questionary.text(
+                "Base URL",
+                default=profile.base_url,
+                style=style,
+            )
+        )
+        profile.api_key_env = _questionary_safe_ask(
+            questionary.text(
+                "API key env var name",
+                default=profile.api_key_env,
+                style=style,
+            )
+        )
+
+    configure_advanced = setup_mode == "advanced"
+    if setup_mode == "quick":
+        configure_advanced = _questionary_safe_ask(
+            questionary.confirm(
+                "Open advanced options (command, args, env overrides)?",
+                default=False,
+                style=style,
+            )
+        )
+
+    if configure_advanced:
+        profile.agent = _questionary_safe_ask(
+            questionary.text(
+                "Agent CLI name",
+                default=profile.agent or (Path(profile.command[0]).name if profile.command else ""),
+                style=style,
+            )
+        )
+        command_default = " ".join(profile.command)
+        command_raw = _questionary_safe_ask(
+            questionary.text(
+                "Exact command override (optional)",
+                default=command_default,
+                style=style,
+                instruction="Leave empty to use the agent CLI name.",
+            )
+        )
+        profile.command = shlex.split(command_raw) if command_raw.strip() else []
+        args_raw = _questionary_safe_ask(
+            questionary.text(
+                "Extra args (optional)",
+                default=" ".join(profile.args),
+                style=style,
+                instruction="Example: --config-file ~/.kimi/config.toml",
+            )
+        )
+        profile.args = shlex.split(args_raw) if args_raw.strip() else []
+
+        env_assignments = dict(profile.env)
+        while _questionary_safe_ask(
+            questionary.confirm("Add a static env assignment?", default=False, style=style)
+        ):
+            key = _questionary_safe_ask(questionary.text("Env key", style=style))
+            value = _questionary_safe_ask(questionary.text("Env value", style=style))
+            env_assignments[key] = value
+        profile.env = env_assignments
+
+        env_map_assignments = dict(profile.env_map)
+        while _questionary_safe_ask(
+            questionary.confirm("Add an env mapping from an existing shell variable?", default=False, style=style)
+        ):
+            dest = _questionary_safe_ask(
+                questionary.text("Destination env key", style=style)
+            )
+            source = _questionary_safe_ask(
+                questionary.text("Source shell env var", style=style)
+            )
+            env_map_assignments[dest] = source
+        profile.env_map = env_map_assignments
+
+    if not profile.command and not profile.agent:
+        console.print("[red]Profile must define either an agent CLI name or a command.[/red]")
+        raise typer.Exit(1)
+
+    console.print("\n[bold]Profile preview[/bold]")
+    console.print(f"  Name: {profile_name}")
+    console.print(f"  Agent: {profile.agent or '(unset)'}")
+    console.print(f"  Command: {' '.join(profile.command) or '(derived from agent)'}")
+    console.print(f"  Model: {profile.model or '(default)'}")
+    console.print(f"  Base URL: {profile.base_url or '(default)'}")
+    console.print(f"  API key env: {profile.api_key_env or '(unset)'}")
+    if profile.args:
+        console.print(f"  Extra args: {' '.join(profile.args)}")
+    if profile.env:
+        console.print("  Static env:")
+        for key, value in sorted(profile.env.items()):
+            console.print(f"    {key}={value}")
+    if profile.env_map:
+        console.print("  Env map:")
+        for key, value in sorted(profile.env_map.items()):
+            console.print(f"    {key} <- ${value}")
+
+    existing_profiles = list_profiles()
+    if profile_name in existing_profiles:
+        overwrite = _questionary_safe_ask(
+            questionary.confirm(
+                f"Profile '{profile_name}' already exists. Overwrite it?",
+                default=False,
+                style=style,
+            )
+        )
+        if not overwrite:
+            console.print("[yellow]Wizard cancelled without saving.[/yellow]")
+            raise typer.Exit(1)
+
+    save_profile(profile_name, profile)
+    console.print(f"[green]OK[/green] Saved profile '{profile_name}'")
+
+    normalized_client = (profile.agent or "").lower()
+    if normalized_client in {"claude", "claude-code"}:
+        if _questionary_safe_ask(
+            questionary.confirm(
+                "Run `clawteam profile doctor claude` now to suppress first-run onboarding?",
+                default=True,
+                style=style,
+            )
+        ):
+            profile_doctor("claude")
+
+    if _questionary_safe_ask(
+        questionary.confirm("Run a smoke test for this profile now?", default=False, style=style)
+    ):
+        test_cwd = _questionary_safe_ask(
+            questionary.text(
+                "Working directory for the smoke test (optional)",
+                default="",
+                style=style,
+            )
+        )
+        profile_test(profile_name, cwd=test_cwd or None)
 
 
 @profile_app.command("doctor")

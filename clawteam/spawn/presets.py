@@ -11,6 +11,35 @@ PresetSource = Literal["builtin", "local"]
 
 def builtin_presets() -> dict[str, AgentPreset]:
     """Return built-in preset catalog."""
+    def claude_compatible_preset(
+        description: str,
+        auth_env: str,
+        base_url: str,
+        model: str,
+        *,
+        extra_env: dict[str, str] | None = None,
+    ) -> AgentPreset:
+        env = {
+            "ANTHROPIC_MODEL": model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+        }
+        if extra_env:
+            env.update(extra_env)
+        return AgentPreset(
+            description=description,
+            auth_env=auth_env,
+            client_overrides={
+                "claude": AgentProfile(
+                    agent="claude",
+                    model=model,
+                    base_url=base_url,
+                    env=env,
+                )
+            },
+        )
+
     return {
         "anthropic-official": AgentPreset(
             description="Official Claude Code setup using direct Anthropic auth.",
@@ -29,6 +58,16 @@ def builtin_presets() -> dict[str, AgentPreset]:
                 "codex": AgentProfile(
                     agent="codex",
                     model="gpt-5.4",
+                )
+            },
+        ),
+        "google-ai-studio": AgentPreset(
+            description="Official Gemini CLI setup using a Gemini API key from Google AI Studio.",
+            auth_env="GEMINI_API_KEY",
+            client_overrides={
+                "gemini": AgentProfile(
+                    agent="gemini",
+                    model="gemini-2.5-pro",
                 )
             },
         ),
@@ -53,6 +92,91 @@ def builtin_presets() -> dict[str, AgentPreset]:
                     agent="kimi",
                     model="kimi-k2-thinking-turbo",
                     base_url="https://api.moonshot.cn/v1",
+                ),
+            },
+        ),
+        "deepseek": claude_compatible_preset(
+            "DeepSeek via Anthropic-compatible Claude Code endpoint.",
+            "DEEPSEEK_API_KEY",
+            "https://api.deepseek.com/anthropic",
+            "DeepSeek-V3.2",
+        ),
+        "zhipu-cn": claude_compatible_preset(
+            "Zhipu GLM via the mainland China Anthropic-compatible endpoint.",
+            "ZHIPU_API_KEY",
+            "https://open.bigmodel.cn/api/anthropic",
+            "glm-5",
+        ),
+        "zhipu-global": claude_compatible_preset(
+            "Zhipu GLM via the global Anthropic-compatible endpoint.",
+            "ZHIPU_API_KEY",
+            "https://api.z.ai/api/anthropic",
+            "glm-5",
+        ),
+        "bailian": AgentPreset(
+            description="Alibaba Bailian Claude-compatible endpoint.",
+            auth_env="DASHSCOPE_API_KEY",
+            client_overrides={
+                "claude": AgentProfile(
+                    agent="claude",
+                    base_url="https://dashscope.aliyuncs.com/apps/anthropic",
+                )
+            },
+        ),
+        "bailian-coding": AgentPreset(
+            description="Alibaba Bailian coding endpoint for Claude Code.",
+            auth_env="DASHSCOPE_API_KEY",
+            client_overrides={
+                "claude": AgentProfile(
+                    agent="claude",
+                    base_url="https://coding.dashscope.aliyuncs.com/apps/anthropic",
+                )
+            },
+        ),
+        "minimax-cn": claude_compatible_preset(
+            "MiniMax China Anthropic-compatible Claude Code endpoint.",
+            "MINIMAX_API_KEY",
+            "https://api.minimaxi.com/anthropic",
+            "MiniMax-M2.5",
+            extra_env={
+                "API_TIMEOUT_MS": "3000000",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            },
+        ),
+        "minimax-global": claude_compatible_preset(
+            "MiniMax global Anthropic-compatible Claude Code endpoint.",
+            "MINIMAX_API_KEY",
+            "https://api.minimax.io/anthropic",
+            "MiniMax-M2.5",
+            extra_env={
+                "API_TIMEOUT_MS": "3000000",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            },
+        ),
+        "openrouter": AgentPreset(
+            description="OpenRouter preset spanning Claude Code, Codex, and Gemini CLI.",
+            auth_env="OPENROUTER_API_KEY",
+            client_overrides={
+                "claude": AgentProfile(
+                    agent="claude",
+                    model="anthropic/claude-sonnet-4.6",
+                    base_url="https://openrouter.ai/api",
+                    env={
+                        "ANTHROPIC_MODEL": "anthropic/claude-sonnet-4.6",
+                        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic/claude-haiku-4.5",
+                        "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic/claude-sonnet-4.6",
+                        "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic/claude-opus-4.6",
+                    },
+                ),
+                "codex": AgentProfile(
+                    agent="codex",
+                    model="openai/gpt-5.4",
+                    base_url="https://openrouter.ai/api/v1",
+                ),
+                "gemini": AgentProfile(
+                    agent="gemini",
+                    model="google/gemini-2.5-pro",
+                    base_url="https://openrouter.ai/api",
                 ),
             },
         ),

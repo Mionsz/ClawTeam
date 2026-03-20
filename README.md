@@ -414,6 +414,36 @@ clawteam spawn --team my-team --agent-name bob   --task "Write unit tests for au
 clawteam board attach my-team
 ```
 
+### 🧩 Profiles and Presets
+
+When you want to use a non-default provider, model, or API gateway, configure a
+**profile** first instead of manually exporting provider env vars each time.
+
+```bash
+# See built-in provider templates
+clawteam preset list
+clawteam preset show moonshot-cn
+
+# Generate a reusable runtime profile from a preset
+clawteam preset generate-profile moonshot-cn claude --name claude-kimi
+
+# Or use the interactive TUI
+clawteam profile wizard
+
+# Claude Code on a fresh machine/home may need this once
+clawteam profile doctor claude
+
+# Smoke-test the profile before spawning workers
+MOONSHOT_API_KEY=... clawteam profile test claude-kimi
+```
+
+Rules of thumb:
+
+- `profile` is the final runtime object used by `spawn` / `launch`
+- `preset` is a reusable provider template that generates one or more profiles
+- `wizard` is the easiest path for first-time setup
+- `doctor` is mainly for Claude Code first-run onboarding state
+
 ### 🧭 Which Spawn Command Should I Use?
 
 Use `clawteam spawn [backend] [command] ...` with the command that already works on
@@ -428,6 +458,9 @@ clawteam spawn tmux codex --team my-team --agent-name bob --task "Write frontend
 
 # nanobot
 clawteam spawn tmux nanobot --team my-team --agent-name carol --task "Build the API"
+
+# A configured profile (recommended for non-default providers/models)
+clawteam spawn tmux --profile claude-kimi --team my-team --agent-name dave --task "Refactor the auth flow"
 ```
 
 Notes:
@@ -436,6 +469,7 @@ Notes:
 - `subprocess` is better for one-shot tools or non-interactive scripts.
 - `nanobot` is normalized internally to `nanobot agent`, so the command above is the correct ClawTeam entrypoint.
 - Claude Code and Codex trust prompts in fresh worktrees are auto-confirmed by the tmux backend.
+- For non-default providers/models, prefer `--profile <name>` over manually exporting env vars inline.
 
 ### 🔌 Adding a Different Agent
 
@@ -467,8 +501,12 @@ All examples below assume the corresponding CLI already runs standalone on your 
 | [Codex](https://openai.com/codex) | `clawteam spawn tmux codex --team ...` | ✅ Full support |
 | [OpenClaw](https://github.com/openclaw/openclaw) | `clawteam spawn tmux openclaw --team ...` | ✅ Full support |
 | [nanobot](https://github.com/HKUDS/nanobot) | `clawteam spawn tmux nanobot --team ...` | ✅ Full support |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | `clawteam spawn tmux kimi --team ...` | ✅ Full support |
 | [Cursor](https://cursor.com) | `clawteam spawn subprocess cursor --team ...` | 🔮 Experimental |
 | Custom scripts | `clawteam spawn subprocess python --team ...` | ✅ Full support |
+
+For provider-aware setups such as Claude Code via Moonshot Kimi or Gemini via
+Vertex, use `profile` + `preset` and then spawn with `--profile`.
 
 ---
 

@@ -80,14 +80,14 @@ def apply_profile(
             resolved_env[dest] = value
 
     if profile.base_url:
-        base_url_env = _base_url_env_var(agent)
+        base_url_env = profile.base_url_env or _base_url_env_var(agent)
         if base_url_env:
             resolved_env.setdefault(base_url_env, profile.base_url)
 
     if profile.api_key_env:
         token = os.environ.get(profile.api_key_env)
         if token:
-            api_key_target = _api_key_target_env(agent)
+            api_key_target = profile.api_key_target_env or _api_key_target_env(agent)
             if api_key_target:
                 resolved_env.setdefault(api_key_target, token)
 
@@ -124,6 +124,8 @@ def _base_url_env_var(agent: str) -> str | None:
         return "ANTHROPIC_BASE_URL"
     if agent in {"codex", "codex-cli"}:
         return "OPENAI_BASE_URL"
+    if agent == "gemini":
+        return "GOOGLE_GEMINI_BASE_URL"
     if agent == "kimi":
         return "KIMI_BASE_URL"
     return None

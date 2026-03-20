@@ -18,6 +18,28 @@ def test_generate_profile_from_builtin_preset():
     assert profile.env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "kimi-k2.5"
 
 
+def test_generate_profile_from_openrouter_preset_for_multiple_clients():
+    _, claude_profile = generate_profile_from_preset("openrouter", "claude")
+    _, codex_profile = generate_profile_from_preset("openrouter", "codex")
+    _, gemini_profile = generate_profile_from_preset("openrouter", "gemini")
+
+    assert claude_profile.base_url == "https://openrouter.ai/api"
+    assert claude_profile.api_key_env == "OPENROUTER_API_KEY"
+    assert codex_profile.base_url == "https://openrouter.ai/api/v1"
+    assert codex_profile.model == "openai/gpt-5.4"
+    assert gemini_profile.base_url == "https://openrouter.ai/api"
+    assert gemini_profile.model == "google/gemini-2.5-pro"
+
+
+def test_generate_profile_from_google_ai_studio_preset():
+    name, profile = generate_profile_from_preset("google-ai-studio", "gemini")
+
+    assert name == "gemini-google-ai-studio"
+    assert profile.agent == "gemini"
+    assert profile.model == "gemini-2.5-pro"
+    assert profile.api_key_env == "GEMINI_API_KEY"
+
+
 def test_local_preset_overrides_builtin(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path / ".clawteam"))
