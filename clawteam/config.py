@@ -23,6 +23,16 @@ class AgentProfile(BaseModel):
     args: list[str] = Field(default_factory=list)
 
 
+class AgentPreset(BaseModel):
+    """Shared preset input for generating client-scoped profiles."""
+
+    description: str = ""
+    auth_env: str = ""
+    base_url: str = ""
+    env: dict[str, str] = Field(default_factory=dict)
+    client_overrides: dict[str, AgentProfile] = Field(default_factory=dict)
+
+
 class ClawTeamConfig(BaseModel):
     data_dir: str = ""
     user: str = ""
@@ -35,6 +45,7 @@ class ClawTeamConfig(BaseModel):
     gource_resolution: str = "1280x720"  # default viewport resolution
     gource_seconds_per_day: float = 0.5  # animation speed
     profiles: dict[str, AgentProfile] = Field(default_factory=dict)
+    presets: dict[str, AgentPreset] = Field(default_factory=dict)
 
 
 def config_path() -> Path:
@@ -99,4 +110,8 @@ def get_effective(key: str) -> tuple[str, str]:
 
 def scalar_config_keys() -> list[str]:
     """Return user-facing scalar config keys (excluding nested structures)."""
-    return [key for key in ClawTeamConfig.model_fields.keys() if key != "profiles"]
+    return [
+        key
+        for key in ClawTeamConfig.model_fields.keys()
+        if key not in {"profiles", "presets"}
+    ]

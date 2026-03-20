@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+from typer.testing import CliRunner
+
+from clawteam.cli.commands import app
+from clawteam.config import AgentPreset, AgentProfile, ClawTeamConfig, load_config, save_config
+from clawteam.spawn.presets import generate_profile_from_preset, list_presets
+
+
+def test_generate_profile_from_builtin_preset():
+    name, profile = generate_profile_from_preset("moonshot-cn", "claude")
+
+    assert name == "claude-moonshot-cn"
+    assert profile.agent == "claude"
+    assert profile.model == "kimi-k2.5"
+    assert profile.base_url == "https://api.moonshot.cn/anthropic"
+    assert profile.api_key_env == "MOONSHOT_API_KEY"
+    assert profile.env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "kimi-k2.5"
+
+
+def test_local_preset_overrides_builtin(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path / ".clawteam"))
+    save_config(
+        ClawTeamConfig(
+            presets={
+                "moonshot-cn": AgentPreset(
+                    description="local override",
+                    auth_env="LOCAL_MOONSHOT_KEY",
+                    client_overrides={
+                        "claude": AgentProfile(
+                            agent="claude",
+                            model="kimi-k3",
+                            base_url="https://local.example/anthropic",
+                        )
+                    },
+                )
+            }
+        )
+    )
+
+    preset, source = list_presets()["moonshot-cn"]
+    assert source == "local"
+    assert preset.auth_env == "LOCAL_MOONSHOT_KEY"
+
+    _, profile = generate_profile_from_preset("moonshot-cn", "claude")
+    assert profile.model == "kimi-k3"
+    assert profile.base_url == "https://local.example/anthropic"
+    assert profile.api_key_env == "LOCAL_MOONSHOT_KEY"
+
+
+def test_preset_cli_copy_set_client_generate_and_bootstrap(tmp_path):
+    runner = CliRunner()
+    env = {
+        "HOME": str(tmp_path),
+        "CLAWTEAM_DATA_DIR": str(tmp_path / ".clawteam"),
+    }
+
+    result = runner.invoke(app, ["preset", "copy", "moonshot-cn", "moonshot-custom"], env=env)
+    assert result.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "preset",
+            "set-client",
+            "moonshot-custom",
+            "claude",
+            "--model",
+            "kimi-k2.6",
+            "--env",
+            "ENABLE_TOOL_SEARCH=true",
+        ],
+        env=env,
+    )
+    assert result.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "preset",
+            "generate-profile",
+            "moonshot-custom",
+            "claude",
+            "--name",
+            "claude-custom",
+        ],
+        env=env,
+    )
+    assert result.exit_code == 0
+
+    result = runner.invoke(app, ["profile", "show", "claude-custom"], env=env)
+    assert result.exit_code == 0
+    assert "kimi-k2.6" in result.output
+    assert "MOONSHOT_API_KEY" in result.output
+
+    result = runner.invoke(
+        app,
+        ["preset", "bootstrap", "moonshot-custom", "--client", "claude", "--client", "kimi"],
+        env=env,
+    )
+    assert result.exit_code == 0
+    assert "claude-moonshot-custom" in result.output
+    assert "kimi-moonshot-custom" in result.output
+
+    cfg = load_config()
+    assert "moonshot-custom" in cfg.presets
+    assert "claude-custom" in cfg.profiles
+    assert "claude-moonshot-custom" in cfg.profiles
+    assert "kimi-moonshot-custom" in cfg.profiles

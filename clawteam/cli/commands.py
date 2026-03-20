@@ -186,8 +186,323 @@ def config_get(
 # Profile Commands
 # ============================================================================
 
+preset_app = typer.Typer(help="Shared endpoint presets for generating client-scoped profiles")
+app.add_typer(preset_app, name="preset")
+
 profile_app = typer.Typer(help="Reusable agent runtime profiles")
 app.add_typer(profile_app, name="profile")
+
+
+@preset_app.command("list")
+def preset_list():
+    """List built-in and local presets."""
+    from clawteam.spawn.presets import list_presets
+
+    presets = list_presets()
+
+    def _human(data):
+        if not data:
+            console.print("[dim]No presets configured.[/dim]")
+            return
+        table = Table(title="Presets")
+        table.add_column("Name", style="cyan")
+        table.add_column("Source")
+        table.add_column("Clients")
+        table.add_column("Auth Env")
+        table.add_column("Base URL")
+        table.add_column("Description")
+        for name, item in sorted(data.items()):
+            preset = item["preset"]
+            table.add_row(
+                name,
+                item["source"],
+                ", ".join(sorted(preset.get("client_overrides", {}).keys())) or "(none)",
+                preset.get("auth_env", "") or "(unset)",
+                preset.get("base_url", "") or "(default)",
+                preset.get("description", "") or "",
+            )
+        console.print(table)
+
+    _output(
+        {
+            name: {"preset": _dump(preset), "source": source}
+            for name, (preset, source) in presets.items()
+        },
+        _human,
+    )
+
+
+@preset_app.command("show")
+def preset_show(
+    name: str = typer.Argument(..., help="Preset name"),
+):
+    """Show a single preset."""
+    from clawteam.spawn.presets import load_preset
+
+    try:
+        preset, source = load_preset(name)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    data = {"preset": _dump(preset), "source": source}
+
+    def _human(d):
+        preset = d["preset"]
+        console.print(f"[bold cyan]{name}[/bold cyan]  [dim]({d['source']})[/dim]")
+        console.print(f"  Description: {preset.get('description') or ''}")
+        console.print(f"  Auth env: {preset.get('auth_env') or '(unset)'}")
+        console.print(f"  Base URL: {preset.get('base_url') or '(default)'}")
+        if preset.get("env"):
+            console.print("  Shared env:")
+            for key, value in sorted(preset["env"].items()):
+                console.print(f"    {key}={value}")
+        if preset.get("client_overrides"):
+            console.print("  Client overrides:")
+            for client, profile in sorted(preset["client_overrides"].items()):
+                command = " ".join(profile.get("command", [])) or profile.get("agent") or "(unset)"
+                model = profile.get("model") or "(default)"
+                base_url = profile.get("base_url") or preset.get("base_url") or "(default)"
+                console.print(f"    {client}: {command} | model={model} | base_url={base_url}")
+
+    _output(data, _human)
+
+
+@preset_app.command("set")
+def preset_set(
+    name: str = typer.Argument(..., help="Preset name"),
+    description: Optional[str] = typer.Option(None, "--description", help="Preset description"),
+    auth_env: Optional[str] = typer.Option(None, "--auth-env", help="Default source env var holding provider auth"),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Default base URL shared by clients"),
+    env: list[str] = typer.Option(None, "--env", help="Shared env assignment KEY=VALUE"),
+):
+    """Create or update a shared preset."""
+    from clawteam.spawn.presets import editable_preset, save_preset
+
+    preset = editable_preset(name)
+    if description is not None:
+        preset.description = description
+    if auth_env is not None:
+        preset.auth_env = auth_env
+    if base_url is not None:
+        preset.base_url = base_url
+    if env:
+        preset.env = _parse_key_value_items(env, label="env")
+
+    save_preset(name, preset)
+    _output(
+        {"status": "saved", "preset": name},
+        lambda d: console.print(f"[green]OK[/green] Saved preset '{name}'"),
+    )
+
+
+@preset_app.command("set-client")
+def preset_set_client(
+    preset_name: str = typer.Argument(..., help="Preset name"),
+    client: str = typer.Argument(..., help="Client name (claude/codex/gemini/kimi)"),
+    agent: Optional[str] = typer.Option(None, "--agent", help="Default client CLI name"),
+    description: Optional[str] = typer.Option(None, "--description", help="Client-specific description"),
+    command: Optional[str] = typer.Option(None, "--command", help="Exact command string"),
+    model: Optional[str] = typer.Option(None, "--model", help="Default model"),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Client-specific base URL override"),
+    api_key_env: Optional[str] = typer.Option(None, "--api-key-env", help="Client-specific source env var override"),
+    env: list[str] = typer.Option(None, "--env", help="Static env assignment KEY=VALUE"),
+    env_map: list[str] = typer.Option(None, "--env-map", help="Runtime env mapping DEST=SOURCE_ENV"),
+    arg: list[str] = typer.Option(None, "--arg", help="Extra argument appended to the agent command"),
+):
+    """Create or update a client override inside a preset."""
+    from clawteam.config import AgentProfile
+    from clawteam.spawn.presets import editable_preset, save_preset
+
+    preset = editable_preset(preset_name)
+    normalized_client = client.strip().lower().replace("claude-code", "claude").replace("codex-cli", "codex")
+    existing = preset.client_overrides.get(normalized_client, AgentProfile())
+    profile = existing.model_copy(deep=True)
+
+    if agent is not None:
+        profile.agent = agent
+    if description is not None:
+        profile.description = description
+    if command is not None:
+        profile.command = shlex.split(command)
+    if model is not None:
+        profile.model = model
+    if base_url is not None:
+        profile.base_url = base_url
+    if api_key_env is not None:
+        profile.api_key_env = api_key_env
+    if env:
+        profile.env = _parse_key_value_items(env, label="env")
+    if env_map:
+        profile.env_map = _parse_key_value_items(env_map, label="env-map")
+    if arg:
+        profile.args = list(arg)
+    if not profile.command and not profile.agent:
+        profile.agent = normalized_client
+
+    preset.client_overrides[normalized_client] = profile
+    save_preset(preset_name, preset)
+    _output(
+        {"status": "saved", "preset": preset_name, "client": normalized_client},
+        lambda d: console.print(
+            f"[green]OK[/green] Saved client override '{normalized_client}' in preset '{preset_name}'"
+        ),
+    )
+
+
+@preset_app.command("copy")
+def preset_copy(
+    source: str = typer.Argument(..., help="Source preset"),
+    target: str = typer.Argument(..., help="Target local preset name"),
+):
+    """Copy a built-in or local preset into a new local preset."""
+    from clawteam.spawn.presets import copy_preset, list_presets
+
+    if target in list_presets():
+        console.print(f"[red]Preset '{target}' already exists.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        copy_preset(source, target)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    _output(
+        {"status": "copied", "source": source, "target": target},
+        lambda d: console.print(
+            f"[green]OK[/green] Copied preset '{source}' to '{target}'"
+        ),
+    )
+
+
+@preset_app.command("remove")
+def preset_remove(
+    name: str = typer.Argument(..., help="Local preset name"),
+):
+    """Remove a locally configured preset."""
+    from clawteam.spawn.presets import remove_preset
+
+    if not remove_preset(name):
+        console.print(
+            f"[red]Local preset '{name}' not found.[/red] [dim](Built-ins cannot be removed.)[/dim]"
+        )
+        raise typer.Exit(1)
+
+    _output(
+        {"status": "removed", "preset": name},
+        lambda d: console.print(f"[green]OK[/green] Removed preset '{name}'"),
+    )
+
+
+@preset_app.command("remove-client")
+def preset_remove_client(
+    preset_name: str = typer.Argument(..., help="Preset name"),
+    client: str = typer.Argument(..., help="Client name"),
+):
+    """Remove a single client override from a local preset."""
+    from clawteam.spawn.presets import remove_preset_client
+
+    if not remove_preset_client(preset_name, client):
+        console.print(
+            f"[red]Client override '{client}' not found in local preset '{preset_name}'.[/red]"
+        )
+        raise typer.Exit(1)
+
+    _output(
+        {"status": "removed", "preset": preset_name, "client": client},
+        lambda d: console.print(
+            f"[green]OK[/green] Removed client override '{client}' from preset '{preset_name}'"
+        ),
+    )
+
+
+@preset_app.command("generate-profile")
+def preset_generate_profile(
+    preset_name: str = typer.Argument(..., help="Preset name"),
+    client: str = typer.Argument(..., help="Client name"),
+    name: Optional[str] = typer.Option(None, "--name", help="Target profile name (default: <client>-<preset>)"),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing profile"),
+):
+    """Generate a single profile from a preset."""
+    from clawteam.spawn.presets import generate_profile_from_preset
+    from clawteam.spawn.profiles import list_profiles, save_profile
+
+    try:
+        profile_name, profile = generate_profile_from_preset(preset_name, client, name=name)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if profile_name in list_profiles() and not force:
+        console.print(
+            f"[red]Profile '{profile_name}' already exists. Use --force to overwrite.[/red]"
+        )
+        raise typer.Exit(1)
+
+    save_profile(profile_name, profile)
+    _output(
+        {"status": "saved", "profile": profile_name, "preset": preset_name, "client": client},
+        lambda d: console.print(
+            f"[green]OK[/green] Generated profile '{profile_name}' from preset '{preset_name}' for client '{client}'"
+        ),
+    )
+
+
+@preset_app.command("bootstrap")
+def preset_bootstrap(
+    preset_name: str = typer.Argument(..., help="Preset name"),
+    client: list[str] = typer.Option(None, "--client", help="Client to generate (repeatable). Defaults to all clients defined by the preset"),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing profiles"),
+):
+    """Generate one profile per client from a preset."""
+    from clawteam.spawn.presets import generate_profile_from_preset, load_preset, preset_clients
+    from clawteam.spawn.profiles import list_profiles, save_profile
+
+    try:
+        preset, _ = load_preset(preset_name)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    clients = client or preset_clients(preset)
+    if not clients:
+        console.print(f"[red]Preset '{preset_name}' does not define any clients.[/red]")
+        raise typer.Exit(1)
+
+    existing_profiles = list_profiles()
+    generated: list[str] = []
+    skipped: list[str] = []
+
+    for item in clients:
+        try:
+            profile_name, profile = generate_profile_from_preset(preset_name, item)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+        if profile_name in existing_profiles and not force:
+            skipped.append(profile_name)
+            continue
+        save_profile(profile_name, profile)
+        generated.append(profile_name)
+
+    data = {
+        "preset": preset_name,
+        "generated": generated,
+        "skipped": skipped,
+    }
+
+    def _human(d):
+        if d["generated"]:
+            console.print(
+                f"[green]OK[/green] Generated profiles from '{preset_name}': {', '.join(d['generated'])}"
+            )
+        if d["skipped"]:
+            console.print(
+                f"[yellow]Skipped existing profiles[/yellow]: {', '.join(d['skipped'])}"
+            )
+
+    _output(data, _human)
 
 
 @profile_app.command("list")
