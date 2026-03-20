@@ -36,6 +36,13 @@ def _claimable_paths(inbox: Path) -> list[Path]:
 
 
 def _is_locked(path: Path) -> bool:
+    """Best-effort Unix lock probe for claimed mailbox files.
+
+    This uses ``fcntl.flock()``, so it only reflects the advisory lock state on
+    Unix-like systems. The probe must release the lock before returning, which
+    means callers must treat the result as advisory rather than a hard
+    cross-process guarantee.
+    """
     try:
         handle = path.open("rb")
     except Exception:
@@ -59,6 +66,32 @@ class FileTransport(Transport):
 
     def __init__(self, team_name: str):
         self.team_name = team_name
+
+    def _make_claimed_message(
+        self,
+        agent_name: str,
+        original_path: Path,
+        consumed_path: Path,
+        file_handle,
+        data: bytes,
+    ) -> ClaimedMessage:
+        def _ack() -> None:
+            try:
+                consumed_path.unlink(missing_ok=True)
+            finally:
+                file_handle.close()
+
+        def _quarantine(error: str) -> None:
+            self._quarantine_bytes(
+                agent_name,
+                data,
+                error,
+                source_name=original_path.name,
+                consumed_path=consumed_path,
+            )
+            file_handle.close()
+
+        return ClaimedMessage(data=data, ack=_ack, quarantine=_quarantine)
 
     def deliver(self, recipient: str, data: bytes) -> None:
         inbox = _inbox_dir(self.team_name, recipient)
@@ -102,32 +135,15 @@ class FileTransport(Transport):
                 file_handle.close()
                 consumed.unlink(missing_ok=True)
                 continue
-
-            def _ack(consumed_path: Path = consumed, handle=file_handle) -> None:
-                try:
-                    consumed_path.unlink(missing_ok=True)
-                finally:
-                    handle.close()
-
-            def _quarantine(
-                error: str,
-                *,
-                consumed_path: Path = consumed,
-                original_name: str = path.name,
-                agent: str = agent_name,
-                data_bytes: bytes = data,
-                handle=file_handle,
-            ) -> None:
-                self._quarantine_bytes(
-                    agent,
-                    data_bytes,
-                    error,
-                    source_name=original_name,
-                    consumed_path=consumed_path,
+            claimed.append(
+                self._make_claimed_message(
+                    agent_name=agent_name,
+                    original_path=path,
+                    consumed_path=consumed,
+                    file_handle=file_handle,
+                    data=data,
                 )
-                handle.close()
-
-            claimed.append(ClaimedMessage(data=data, ack=_ack, quarantine=_quarantine))
+            )
         return claimed
 
     def _quarantine_bytes(

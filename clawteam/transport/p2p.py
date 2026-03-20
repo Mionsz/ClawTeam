@@ -179,26 +179,27 @@ class P2PTransport(Transport):
         return claimed
 
     def fetch(self, agent_name: str, limit: int = 10, consume: bool = True) -> list[bytes]:
-        messages: list[bytes] = []
-        # 1. Drain peek buffer first (only on consume)
         if consume:
-            while self._peek_buffer and len(messages) < limit:
-                messages.append(self._peek_buffer.popleft())
-        # 2. Drain ZMQ PULL socket (non-blocking)
+            messages: list[bytes] = []
+            for claimed in self.claim_messages(agent_name, limit):
+                messages.append(claimed.data)
+                claimed.ack()
+            return messages
+
+        messages: list[bytes] = []
+        # 1. Drain ZMQ PULL socket (non-blocking)
         if self._pull:
             import zmq
 
             while len(messages) < limit:
                 try:
                     data = self._pull.recv(zmq.NOBLOCK)
-                    if consume:
-                        messages.append(data)
-                    else:
-                        self._peek_buffer.append(data)
-                        messages.append(data)
+                    self._peek_buffer.append(data)
+                    messages.append(data)
                 except zmq.Again:
                     break
-        # 3. File fallback for remaining
+
+        # 2. File fallback for remaining
         remaining = limit - len(messages)
         if remaining > 0:
             messages.extend(self._file_fallback.fetch(agent_name, remaining, consume))

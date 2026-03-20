@@ -69,6 +69,10 @@ def _read_inbox_messages(directory: Path) -> list[dict]:
             continue
         try:
             try:
+                # Snapshot capture only needs a best-effort view of recovered
+                # `.consumed` files. This Unix-only `flock()` probe avoids
+                # active claims, but the result is advisory because the lock is
+                # released before the caller resumes.
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
                 continue

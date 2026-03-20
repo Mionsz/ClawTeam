@@ -172,7 +172,11 @@ class MailboxManager:
         return result
 
     def receive(self, agent_name: str, limit: int = 10) -> list[TeamMessage]:
-        """Receive and delete messages from an agent's inbox (FIFO)."""
+        """Receive parsed messages from an agent's inbox (FIFO).
+
+        When a transport supports claimed messages, schema validation and
+        quarantine decisions happen here after the raw bytes have been claimed.
+        """
         claim_messages = getattr(self._transport, "claim_messages", None)
         if callable(claim_messages):
             return self._parse_claimed_messages(claim_messages(agent_name, limit))

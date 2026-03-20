@@ -375,6 +375,32 @@ class TestFileTransport:
         assert transport.fetch("bob", consume=True) == []
         assert len(list(inbox.glob("msg-*.json"))) == 1
 
+    def test_p2p_fetch_consume_reuses_claim_path(self, team_name, monkeypatch):
+        from clawteam.transport.claimed import ClaimedMessage
+        from clawteam.transport.p2p import P2PTransport
+
+        transport = P2PTransport(team_name)
+        seen = {"calls": 0, "acks": 0}
+
+        def fake_claim(agent_name: str, limit: int = 10):
+            assert agent_name == "bob"
+            assert limit == 3
+            seen["calls"] += 1
+            return [
+                ClaimedMessage(
+                    data=b"raw-message",
+                    ack=lambda: seen.__setitem__("acks", seen["acks"] + 1),
+                    quarantine=lambda error: None,
+                )
+            ]
+
+        monkeypatch.setattr(transport, "claim_messages", fake_claim)
+
+        assert transport.fetch("bob", limit=3, consume=True) == [b"raw-message"]
+        assert seen == {"calls": 1, "acks": 1}
+
+        transport.close()
+
 
 class TestEventLog:
     def test_send_logs_event(self, team_name):
