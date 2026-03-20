@@ -6,7 +6,21 @@ import json
 import os
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class AgentProfile(BaseModel):
+    """Reusable agent runtime profile for spawn/launch."""
+
+    description: str = ""
+    agent: str = ""
+    command: list[str] = Field(default_factory=list)
+    model: str = ""
+    base_url: str = ""
+    api_key_env: str = ""
+    env: dict[str, str] = Field(default_factory=dict)
+    env_map: dict[str, str] = Field(default_factory=dict)
+    args: list[str] = Field(default_factory=list)
 
 
 class ClawTeamConfig(BaseModel):
@@ -20,6 +34,7 @@ class ClawTeamConfig(BaseModel):
     gource_path: str = ""  # custom path to gource binary (auto-detected if empty)
     gource_resolution: str = "1280x720"  # default viewport resolution
     gource_seconds_per_day: float = 0.5  # animation speed
+    profiles: dict[str, AgentProfile] = Field(default_factory=dict)
 
 
 def config_path() -> Path:
@@ -80,3 +95,8 @@ def get_effective(key: str) -> tuple[str, str]:
         return str(file_val), "file"
 
     return str(default_val), "default"
+
+
+def scalar_config_keys() -> list[str]:
+    """Return user-facing scalar config keys (excluding nested structures)."""
+    return [key for key in ClawTeamConfig.model_fields.keys() if key != "profiles"]

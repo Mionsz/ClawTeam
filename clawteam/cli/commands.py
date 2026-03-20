@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import subprocess
 import sys
 import time
 import uuid
@@ -80,6 +83,21 @@ def _output(data: dict | list, human_fn=None):
         print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
+def _parse_key_value_items(items: list[str], *, label: str) -> dict[str, str]:
+    """Parse repeated KEY=VALUE CLI options into a dict."""
+    parsed: dict[str, str] = {}
+    for item in items:
+        if "=" not in item:
+            console.print(f"[red]Invalid {label} '{item}'. Expected KEY=VALUE.[/red]")
+            raise typer.Exit(1)
+        key, value = item.split("=", 1)
+        if not key:
+            console.print(f"[red]Invalid {label} '{item}'. Key cannot be empty.[/red]")
+            raise typer.Exit(1)
+        parsed[key] = value
+    return parsed
+
+
 # ============================================================================
 # Config Commands
 # ============================================================================
@@ -91,9 +109,9 @@ app.add_typer(config_app, name="config")
 @config_app.command("show")
 def config_show():
     """Show all configuration settings and their sources."""
-    from clawteam.config import ClawTeamConfig, get_effective
+    from clawteam.config import get_effective, scalar_config_keys
 
-    keys = list(ClawTeamConfig.model_fields.keys())
+    keys = scalar_config_keys()
     data = {}
     for k in keys:
         val, source = get_effective(k)
@@ -121,9 +139,9 @@ def config_set(
     value: str = typer.Argument(..., help="Config value"),
 ):
     """Persistently set a configuration value."""
-    from clawteam.config import ClawTeamConfig, load_config, save_config
+    from clawteam.config import ClawTeamConfig, load_config, save_config, scalar_config_keys
 
-    valid_keys = set(ClawTeamConfig.model_fields.keys())
+    valid_keys = set(scalar_config_keys())
     if key not in valid_keys:
         console.print(f"[red]Invalid key '{key}'. Valid: {', '.join(sorted(valid_keys))}[/red]")
         raise typer.Exit(1)
@@ -150,9 +168,9 @@ def config_get(
     ),
 ):
     """Get the effective value of a config key."""
-    from clawteam.config import ClawTeamConfig, get_effective
+    from clawteam.config import get_effective, scalar_config_keys
 
-    valid_keys = set(ClawTeamConfig.model_fields.keys())
+    valid_keys = set(scalar_config_keys())
     if key not in valid_keys:
         console.print(f"[red]Invalid key '{key}'. Valid: {', '.join(sorted(valid_keys))}[/red]")
         raise typer.Exit(1)
@@ -162,6 +180,215 @@ def config_get(
         {"key": key, "value": val, "source": source},
         lambda d: console.print(f"{key} = {val or '(empty)'}  [dim]({source})[/dim]"),
     )
+
+
+# ============================================================================
+# Profile Commands
+# ============================================================================
+
+profile_app = typer.Typer(help="Reusable agent runtime profiles")
+app.add_typer(profile_app, name="profile")
+
+
+@profile_app.command("list")
+def profile_list():
+    """List configured agent profiles."""
+    from clawteam.spawn.profiles import list_profiles
+
+    profiles = list_profiles()
+
+    def _human(data):
+        if not data:
+            console.print("[dim]No profiles configured.[/dim]")
+            return
+        table = Table(title="Profiles")
+        table.add_column("Name", style="cyan")
+        table.add_column("Agent")
+        table.add_column("Model")
+        table.add_column("Base URL")
+        table.add_column("Description")
+        for name, profile in sorted(data.items()):
+            agent = profile.get("agent") or (" ".join(profile.get("command", [])) if profile.get("command") else "")
+            table.add_row(
+                name,
+                agent or "(unset)",
+                profile.get("model", "") or "(default)",
+                profile.get("base_url", "") or "(default)",
+                profile.get("description", "") or "",
+            )
+        console.print(table)
+
+    _output({name: _dump(profile) for name, profile in profiles.items()}, _human)
+
+
+@profile_app.command("show")
+def profile_show(
+    name: str = typer.Argument(..., help="Profile name"),
+):
+    """Show a single profile."""
+    from clawteam.spawn.profiles import load_profile
+
+    try:
+        profile = load_profile(name)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    data = _dump(profile)
+
+    def _human(d):
+        console.print(f"[bold cyan]{name}[/bold cyan]")
+        console.print(f"  Agent: {d.get('agent') or '(unset)'}")
+        console.print(f"  Command: {' '.join(d.get('command', [])) or '(unset)'}")
+        console.print(f"  Model: {d.get('model') or '(default)'}")
+        console.print(f"  Base URL: {d.get('base_url') or '(default)'}")
+        console.print(f"  API key env: {d.get('api_key_env') or '(unset)'}")
+        console.print(f"  Description: {d.get('description') or ''}")
+        if d.get("args"):
+            console.print(f"  Extra args: {' '.join(d['args'])}")
+        if d.get("env"):
+            console.print("  Env:")
+            for key, value in sorted(d["env"].items()):
+                console.print(f"    {key}={value}")
+        if d.get("env_map"):
+            console.print("  Env map:")
+            for key, value in sorted(d["env_map"].items()):
+                console.print(f"    {key} <- ${value}")
+
+    _output(data, _human)
+
+
+@profile_app.command("set")
+def profile_set(
+    name: str = typer.Argument(..., help="Profile name"),
+    agent: Optional[str] = typer.Option(None, "--agent", help="Default agent CLI name (claude/codex/gemini/kimi/nanobot)"),
+    description: Optional[str] = typer.Option(None, "--description", help="Profile description"),
+    command: Optional[str] = typer.Option(None, "--command", help="Exact command string (e.g. 'kimi --config-file ~/.kimi/config.toml')"),
+    model: Optional[str] = typer.Option(None, "--model", help="Default model"),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Provider base URL"),
+    api_key_env: Optional[str] = typer.Option(None, "--api-key-env", help="Source env var holding the API key"),
+    env: list[str] = typer.Option(None, "--env", help="Static env assignment KEY=VALUE"),
+    env_map: list[str] = typer.Option(None, "--env-map", help="Runtime env mapping DEST=SOURCE_ENV"),
+    arg: list[str] = typer.Option(None, "--arg", help="Extra argument appended to the agent command"),
+):
+    """Create or update a profile."""
+    from clawteam.config import AgentProfile
+    from clawteam.spawn.profiles import list_profiles, save_profile
+
+    existing = list_profiles().get(name, AgentProfile())
+    profile = existing.model_copy(deep=True)
+
+    if agent is not None:
+        profile.agent = agent
+    if description is not None:
+        profile.description = description
+    if command is not None:
+        profile.command = shlex.split(command)
+    if model is not None:
+        profile.model = model
+    if base_url is not None:
+        profile.base_url = base_url
+    if api_key_env is not None:
+        profile.api_key_env = api_key_env
+    if env:
+        profile.env = _parse_key_value_items(env, label="env")
+    if env_map:
+        profile.env_map = _parse_key_value_items(env_map, label="env-map")
+    if arg:
+        profile.args = list(arg)
+
+    if not profile.command and not profile.agent:
+        console.print("[red]Profile must define either --agent or --command.[/red]")
+        raise typer.Exit(1)
+
+    save_profile(name, profile)
+    _output(
+        {"status": "saved", "profile": name},
+        lambda d: console.print(f"[green]OK[/green] Saved profile '{name}'"),
+    )
+
+
+@profile_app.command("remove")
+def profile_remove(
+    name: str = typer.Argument(..., help="Profile name"),
+):
+    """Remove a profile."""
+    from clawteam.spawn.profiles import remove_profile
+
+    if not remove_profile(name):
+        console.print(f"[red]Unknown profile '{name}'[/red]")
+        raise typer.Exit(1)
+
+    _output(
+        {"status": "removed", "profile": name},
+        lambda d: console.print(f"[green]OK[/green] Removed profile '{name}'"),
+    )
+
+
+@profile_app.command("test")
+def profile_test(
+    name: str = typer.Argument(..., help="Profile name"),
+    prompt: str = typer.Option("Reply with exactly CLAWTEAM_PROFILE_OK", "--prompt", help="Smoke test prompt"),
+    cwd: Optional[str] = typer.Option(None, "--cwd", help="Working directory for the test run"),
+):
+    """Run a non-interactive smoke test for a profile."""
+    from clawteam.spawn.adapters import NativeCliAdapter
+    from clawteam.spawn.command_validation import validate_spawn_command
+    from clawteam.spawn.profiles import apply_profile, load_profile
+
+    try:
+        profile = load_profile(name)
+        command, env, agent = apply_profile(profile)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    adapter = NativeCliAdapter()
+    prepared = adapter.prepare_command(
+        command,
+        prompt=prompt,
+        cwd=cwd,
+        skip_permissions=True,
+        interactive=False,
+    )
+    command_error = validate_spawn_command(prepared.normalized_command, path=os.environ.get("PATH"), cwd=cwd)
+    if command_error:
+        console.print(f"[red]{command_error}[/red]")
+        raise typer.Exit(1)
+
+    run_env = os.environ.copy()
+    run_env.update(env)
+    result = subprocess.run(
+        prepared.final_command,
+        cwd=cwd,
+        env=run_env,
+        capture_output=True,
+        text=True,
+    )
+    data = {
+        "profile": name,
+        "agent": agent,
+        "command": prepared.final_command,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+    def _human(d):
+        console.print(f"Profile: [cyan]{d['profile']}[/cyan]")
+        console.print(f"Agent: [cyan]{d['agent']}[/cyan]")
+        console.print(f"Command: {' '.join(shlex.quote(part) for part in d['command'])}")
+        console.print(f"Return code: {d['returncode']}")
+        if d["stdout"]:
+            console.print("\n[bold]stdout[/bold]")
+            console.print(d["stdout"].rstrip())
+        if d["stderr"]:
+            console.print("\n[bold]stderr[/bold]")
+            console.print(d["stderr"].rstrip())
+
+    _output(data, _human)
+    if result.returncode != 0:
+        raise typer.Exit(1)
 
 
 @config_app.command("health")
@@ -1734,6 +1961,7 @@ def spawn_agent(
     command: list[str] = typer.Argument(None, help="Command and arguments to run (default: claude)"),
     team: Optional[str] = typer.Option(None, "--team", "-t", help="Team name"),
     agent_name: Optional[str] = typer.Option(None, "--agent-name", "-n", help="Agent name"),
+    profile: Optional[str] = typer.Option(None, "--profile", help="Apply a named runtime profile"),
     agent_type: str = typer.Option("general-purpose", "--agent-type", help="Agent type"),
     task: Optional[str] = typer.Option(None, "--task", help="Task to assign (becomes the agent's initial prompt)"),
     workspace: Optional[bool] = typer.Option(None, "--workspace/--no-workspace", "-w", help="Create isolated git worktree (default: auto)"),
@@ -1751,12 +1979,13 @@ def spawn_agent(
     """
     from clawteam.config import get_effective
     from clawteam.spawn import get_backend
+    from clawteam.spawn.profiles import apply_profile, load_profile
 
     # Resolve defaults from config
     if backend is None:
         backend, _ = get_effective("default_backend")
         backend = backend or "tmux"
-    if not command:
+    if not command and not profile:
         command = ["claude"]
 
     _team = team or "default"
@@ -1802,6 +2031,20 @@ def spawn_agent(
         import os as _os_repo
         cwd = _os_repo.path.abspath(repo)
 
+    profile_env: dict[str, str] = {}
+    if profile:
+        try:
+            resolved_profile = load_profile(profile)
+            command, profile_env, _ = apply_profile(
+                resolved_profile,
+                command=list(command or []),
+            )
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+    elif not command:
+        command = ["claude"]
+
     # Build prompt: identity + task + clawteam coordination guide
     prompt = None
     if task:
@@ -1831,7 +2074,7 @@ def spawn_agent(
         session = session_store.load(_name)
         if session and session.session_id:
             # Add --resume to claude command
-            if command and command[0] in ("claude",):
+            if command and Path(command[0]).name in ("claude", "claude-code"):
                 command = list(command) + ["--resume", session.session_id]
                 console.print(f"[dim]Resuming session: {session.session_id}[/dim]")
             if prompt:
@@ -1861,6 +2104,7 @@ def spawn_agent(
         agent_type=agent_type,
         team_name=_team,
         prompt=prompt,
+        env=profile_env or None,
         cwd=cwd,
         skip_permissions=skip_permissions,
     )
@@ -2559,6 +2803,7 @@ def launch_team(
     template: str = typer.Argument(..., help="Template name (e.g., hedge-fund)"),
     goal: str = typer.Option("", "--goal", "-g", help="Project goal injected into agent prompts"),
     backend: Optional[str] = typer.Option(None, "--backend", "-b", help="Override backend"),
+    profile: Optional[str] = typer.Option(None, "--profile", help="Apply a named runtime profile to all agents"),
     team_name: Optional[str] = typer.Option(None, "--team-name", "--team", "-t", help="Override team name"),
     workspace: bool = typer.Option(False, "--workspace/--no-workspace", "-w"),
     repo: Optional[str] = typer.Option(None, "--repo", help="Git repo path"),
@@ -2569,6 +2814,7 @@ def launch_team(
 
     from clawteam.config import get_effective
     from clawteam.spawn import get_backend
+    from clawteam.spawn.profiles import apply_profile, load_profile
     from clawteam.spawn.prompt import build_agent_prompt
     from clawteam.team.manager import TeamManager
     from clawteam.team.tasks import TaskStore
@@ -2646,10 +2892,21 @@ def launch_team(
     # 8. Spawn all agents (leader first, then workers)
     all_agents = [tmpl.leader] + list(tmpl.agents)
     spawned: list[dict[str, str]] = []
+    resolved_profile = None
+    if profile:
+        try:
+            resolved_profile = load_profile(profile)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
 
     for agent in all_agents:
         a_id = agent_ids[agent.name]
         a_cmd = agent.command or cmd
+        a_env: dict[str, str] = {}
+        if resolved_profile:
+            command_seed = list(a_cmd) if (agent.command or command_override) else []
+            a_cmd, a_env, _ = apply_profile(resolved_profile, command=command_seed)
 
         # Variable substitution
         rendered = render_task(
@@ -2689,6 +2946,7 @@ def launch_team(
             agent_type=agent.type,
             team_name=t_name,
             prompt=prompt,
+            env=a_env or None,
             cwd=cwd,
             skip_permissions=skip_permissions,
         )

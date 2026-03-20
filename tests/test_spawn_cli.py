@@ -100,3 +100,79 @@ def test_launch_cli_rejects_removed_acpx_backend(monkeypatch, tmp_path):
 
     assert result.exit_code == 1
     assert "Unknown spawn backend: acpx. Available: subprocess, tmux" in result.output
+
+
+def test_spawn_cli_applies_profile_command_and_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("MOONSHOT_API_KEY", "moonshot-secret")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path / ".clawteam"))
+    from clawteam.config import AgentProfile, ClawTeamConfig, save_config
+
+    save_config(
+        ClawTeamConfig(
+            profiles={
+                "moonshot-kimi": AgentProfile(
+                    agent="kimi",
+                    model="kimi-k2-thinking-turbo",
+                    base_url="https://api.moonshot.cn/v1",
+                    api_key_env="MOONSHOT_API_KEY",
+                    args=["--config-file", "/tmp/kimi.toml"],
+                )
+            }
+        )
+    )
+    TeamManager.create_team(
+        name="demo",
+        leader_name="leader",
+        leader_id="leader001",
+    )
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["spawn", "subprocess", "--profile", "moonshot-kimi", "--team", "demo", "--agent-name", "alice", "--no-workspace", "--task", "say hi"],
+        env={"HOME": str(tmp_path), "CLAWTEAM_DATA_DIR": str(tmp_path / ".clawteam"), "MOONSHOT_API_KEY": "moonshot-secret"},
+    )
+
+    assert result.exit_code == 0
+    call = backend.calls[0]
+    assert call["command"] == ["kimi", "--model", "kimi-k2-thinking-turbo", "--config-file", "/tmp/kimi.toml"]
+    assert call["env"]["KIMI_BASE_URL"] == "https://api.moonshot.cn/v1"
+    assert call["env"]["KIMI_API_KEY"] == "moonshot-secret"
+
+
+def test_launch_cli_applies_profile_to_template_agents(monkeypatch, tmp_path):
+    monkeypatch.setenv("MOONSHOT_API_KEY", "moonshot-secret")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path / ".clawteam"))
+    from clawteam.config import AgentProfile, ClawTeamConfig, save_config
+
+    save_config(
+        ClawTeamConfig(
+            profiles={
+                "moonshot-kimi": AgentProfile(
+                    agent="kimi",
+                    model="kimi-k2-thinking-turbo",
+                    base_url="https://api.moonshot.cn/v1",
+                    api_key_env="MOONSHOT_API_KEY",
+                )
+            }
+        )
+    )
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+    monkeypatch.chdir(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["launch", "hedge-fund", "--team", "fund1", "--goal", "Analyze AAPL", "--profile", "moonshot-kimi"],
+        env={"HOME": str(tmp_path), "CLAWTEAM_DATA_DIR": str(tmp_path / ".clawteam"), "MOONSHOT_API_KEY": "moonshot-secret"},
+    )
+
+    assert result.exit_code == 0
+    assert backend.calls
+    assert all(call["command"][:3] == ["kimi", "--model", "kimi-k2-thinking-turbo"] for call in backend.calls)
+    assert all(call["env"]["KIMI_API_KEY"] == "moonshot-secret" for call in backend.calls)
