@@ -47,6 +47,8 @@ def normalize_spawn_command(command: list[str]) -> list[str]:
     executable = Path(command[0]).name
     if executable == "nanobot" and len(command) == 1:
         return [command[0], "agent"]
+    if executable == "openclaw" and len(command) == 1:
+        return [command[0], "agent", "--local"]
 
     return list(command)
 

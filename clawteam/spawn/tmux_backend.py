@@ -71,6 +71,7 @@ class TmuxBackend(SpawnBackend):
             prompt=prompt,
             cwd=cwd,
             skip_permissions=skip_permissions,
+            agent_name=agent_name,
             interactive=True,
         )
         normalized_command = prepared.normalized_command

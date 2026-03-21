@@ -28,6 +28,7 @@ class NativeCliAdapter:
         cwd: str | None = None,
         skip_permissions: bool = False,
         interactive: bool = False,
+        agent_name: str | None = None,
     ) -> PreparedCommand:
         normalized_command = normalize_spawn_command(command)
         final_command = list(normalized_command)
@@ -55,6 +56,19 @@ class NativeCliAdapter:
                 final_command.extend(["-w", cwd])
             if prompt:
                 final_command.extend(["-m", prompt])
+        elif is_openclaw_command(normalized_command):
+            if "agent" in normalized_command:
+                if "--local" not in normalized_command:
+                    final_command.append("--local")
+                if agent_name and "--session-id" not in normalized_command:
+                    final_command.extend(["--session-id", agent_name])
+                if prompt:
+                    final_command.extend(["--message", prompt])
+            else:
+                if agent_name and "--session" not in normalized_command:
+                    final_command.extend(["--session", agent_name])
+                if prompt:
+                    final_command.extend(["--message", prompt])
         elif prompt:
             if interactive and is_claude_command(normalized_command):
                 post_launch_prompt = prompt
@@ -112,6 +126,11 @@ def is_opencode_command(command: list[str]) -> bool:
     return command_basename(command) == "opencode"
 
 
+def is_openclaw_command(command: list[str]) -> bool:
+    """Check if the command is an OpenClaw CLI invocation."""
+    return command_basename(command) == "openclaw"
+
+
 def is_interactive_cli(command: list[str]) -> bool:
     """Check if the command is a known interactive AI coding CLI."""
     return (
@@ -122,6 +141,7 @@ def is_interactive_cli(command: list[str]) -> bool:
         or is_kimi_command(command)
         or is_qwen_command(command)
         or is_opencode_command(command)
+        or is_openclaw_command(command)
     )
 
 
