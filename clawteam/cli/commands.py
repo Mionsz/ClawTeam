@@ -143,6 +143,25 @@ def _questionary_safe_ask(control):
         console.print("[yellow]Cancelled.[/yellow]")
         raise typer.Exit(1)
     return answer
+def _load_skill_content(name: str) -> str | None:
+    """Load skill content from ~/.claude/skills/.
+
+    Supports both directory format (skills/<name>/SKILL.md) and
+    single-file format (skills/<name>.md).
+    """
+    skills_root = Path.home() / ".claude" / "skills"
+    skill_dir = skills_root / name
+    if skill_dir.is_dir():
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.exists():
+            md_files = sorted(skill_dir.glob("*.md"))
+            skill_file = md_files[0] if md_files else None
+        if skill_file and skill_file.exists():
+            return skill_file.read_text(encoding="utf-8")
+    single_file = skills_root / f"{name}.md"
+    if single_file.exists():
+        return single_file.read_text(encoding="utf-8")
+    return None
 
 
 # ============================================================================
@@ -2798,6 +2817,7 @@ def spawn_agent(
     skip_permissions: Optional[bool] = typer.Option(None, "--skip-permissions/--no-skip-permissions", help="Skip tool approval for claude (default: from config, true)"),
     resume: bool = typer.Option(False, "--resume", "-r", help="Resume previous session if available"),
     replace: bool = typer.Option(False, "--replace", help="Replace a running agent with the same name"),
+    skill: Optional[list[str]] = typer.Option(None, "--skill", help="Skill name(s) to inject into the agent's system prompt (repeatable, claude only)"),
 ):
     """Spawn a new agent process with identity + task as its initial prompt.
 
@@ -2969,6 +2989,34 @@ def spawn_agent(
             if prompt:
                 prompt += "\nYou are resuming a previous session."
 
+    # Auto-register agent as team member
+    import os as _os2
+
+    from clawteam.team.manager import TeamManager
+    try:
+        TeamManager.add_member(
+            team_name=_team,
+            member_name=_name,
+            agent_id=_id,
+            agent_type=agent_type,
+            user=_os2.environ.get("CLAWTEAM_USER", ""),
+        )
+    except ValueError:
+        pass  # already a member, ignore
+
+    # Load skill content and build system_prompt
+    system_prompt: str | None = None
+    if skill:
+        skill_parts = []
+        for skill_name in skill:
+            content = _load_skill_content(skill_name)
+            if content is None:
+                console.print(f"[yellow]Warning: skill '{skill_name}' not found in ~/.claude/skills/[/yellow]")
+            else:
+                skill_parts.append(content)
+        if skill_parts:
+            system_prompt = "\n\n".join(skill_parts)
+
     result = be.spawn(
         command=command,
         agent_name=_name,
@@ -2979,6 +3027,7 @@ def spawn_agent(
         env=profile_env or None,
         cwd=cwd,
         skip_permissions=skip_permissions,
+        system_prompt=system_prompt,
     )
 
     if result.startswith("Error"):

@@ -45,6 +45,7 @@ class TmuxBackend(SpawnBackend):
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         skip_permissions: bool = False,
+        system_prompt: str | None = None,
     ) -> str:
         if not shutil.which("tmux"):
             return "Error: tmux not installed"
@@ -87,9 +88,20 @@ class TmuxBackend(SpawnBackend):
         final_command = list(prepared.final_command)
         post_launch_prompt = prepared.post_launch_prompt
 
+
         command_error = validate_spawn_command(validation_command, path=env_vars["PATH"], cwd=cwd)
         if command_error:
             return command_error
+
+        # Build the command (without prompt — we'll send it via send-keys)
+        final_command = list(command)
+        if skip_permissions:
+            if _is_claude_command(command):
+                final_command.append("--dangerously-skip-permissions")
+            elif _is_codex_command(command):
+                final_command.append("--dangerously-bypass-approvals-and-sandbox")
+        if system_prompt and _is_claude_command(command):
+            final_command.extend(["--append-system-prompt", system_prompt])
 
         # tmux launches the command through a shell, so only shell-safe
         # environment names can be exported. The current host environment on
