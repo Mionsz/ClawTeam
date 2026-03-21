@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 from clawteam.team.models import get_data_dir
@@ -74,6 +77,48 @@ def list_dead_agents(team_name: str) -> list[str]:
     return dead
 
 
+def stop_agent(team_name: str, agent_name: str, timeout_seconds: float = 3.0) -> bool | None:
+    """Best-effort stop of a previously registered agent.
+
+    Returns:
+        True if the agent was confirmed stopped.
+        False if it was found but did not stop within the timeout.
+        None if no registry entry exists.
+    """
+    registry = get_registry(team_name)
+    info = registry.get(agent_name)
+    if not info:
+        return None
+
+    backend = info.get("backend", "")
+    if backend == "tmux":
+        target = info.get("tmux_target", "")
+        if target:
+            subprocess.run(
+                ["tmux", "kill-window", "-t", target],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    elif backend == "subprocess":
+        pid = info.get("pid", 0)
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                return False
+
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        alive = is_agent_alive(team_name, agent_name)
+        if alive is False or alive is None:
+            return True
+        time.sleep(0.1)
+
+    return is_agent_alive(team_name, agent_name) in (False, None)
+
+
 def _tmux_pane_alive(target: str) -> bool:
     """Check if a tmux target (session:window) still has a running process."""
     if not target:
@@ -103,7 +148,6 @@ def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
-        import os
         os.kill(pid, 0)
         return True
     except ProcessLookupError:

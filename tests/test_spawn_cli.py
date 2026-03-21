@@ -234,3 +234,56 @@ def test_spawn_cli_rolls_back_auto_created_team_on_spawn_error(monkeypatch, tmp_
 
     assert result.exit_code == 1
     assert TeamManager.get_team("auto-team") is None
+
+
+def test_spawn_cli_rejects_duplicate_running_agent_without_replace(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    TeamManager.create_team(
+        name="demo",
+        leader_name="leader",
+        leader_id="leader001",
+    )
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+    monkeypatch.setattr("clawteam.spawn.registry.is_agent_alive", lambda team, agent: True)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["spawn", "tmux", "claude", "--team", "demo", "--agent-name", "alice", "--no-workspace"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 1
+    assert "already running" in result.output
+    assert not backend.calls
+
+
+def test_spawn_cli_replace_stops_running_agent_before_respawn(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    TeamManager.create_team(
+        name="demo",
+        leader_name="leader",
+        leader_id="leader001",
+    )
+    backend = RecordingBackend()
+    stop_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+    monkeypatch.setattr("clawteam.spawn.registry.is_agent_alive", lambda team, agent: True)
+
+    def _stop(team: str, agent: str, timeout_seconds: float = 3.0) -> bool:
+        stop_calls.append((team, agent))
+        return True
+
+    monkeypatch.setattr("clawteam.spawn.registry.stop_agent", _stop)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["spawn", "tmux", "claude", "--team", "demo", "--agent-name", "alice", "--no-workspace", "--replace"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 0
+    assert stop_calls == [("demo", "alice")]
+    assert backend.calls

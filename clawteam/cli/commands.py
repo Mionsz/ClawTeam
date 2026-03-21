@@ -2620,6 +2620,7 @@ def spawn_agent(
     repo: Optional[str] = typer.Option(None, "--repo", help="Git repo path (default: cwd)"),
     skip_permissions: Optional[bool] = typer.Option(None, "--skip-permissions/--no-skip-permissions", help="Skip tool approval for claude (default: from config, true)"),
     resume: bool = typer.Option(False, "--resume", "-r", help="Resume previous session if available"),
+    replace: bool = typer.Option(False, "--replace", help="Replace a running agent with the same name"),
 ):
     """Spawn a new agent process with identity + task as its initial prompt.
 
@@ -2644,6 +2645,34 @@ def spawn_agent(
     _name = agent_name or f"agent-{uuid.uuid4().hex[:6]}"
     _id = uuid.uuid4().hex[:12]
     user_name = os.environ.get("CLAWTEAM_USER", "")
+
+    from clawteam.spawn.registry import is_agent_alive, stop_agent
+
+    existing_alive = is_agent_alive(_team, _name)
+    if existing_alive is True:
+        if not replace:
+            _output(
+                {
+                    "error": (
+                        f"Agent '{_name}' is already running in team '{_team}'. "
+                        "Use --replace to stop it and spawn a new instance."
+                    )
+                },
+                lambda d: console.print(f"[red]{d['error']}[/red]"),
+            )
+            raise typer.Exit(1)
+
+        if stop_agent(_team, _name) is not True:
+            _output(
+                {
+                    "error": (
+                        f"Failed to stop running agent '{_name}' in team '{_team}'. "
+                        "Retry after the existing process exits."
+                    )
+                },
+                lambda d: console.print(f"[red]{d['error']}[/red]"),
+            )
+            raise typer.Exit(1)
 
     # Resolve skip_permissions from config
     if skip_permissions is None:
