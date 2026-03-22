@@ -136,11 +136,16 @@ class TmuxBackend(SpawnBackend):
             return (
                 f"Error: agent command '{normalized_command[0]}' exited immediately after launch. "
                 "Verify the CLI works standalone before using it with clawteam spawn."
-        # Send the prompt as input to the interactive claude session
-        # (codex prompt is passed as positional arg above, so skip here)
-        if prompt:
-            from clawteam.config import load_config
-            cfg = load_config()
+            )
+
+        from clawteam.config import load_config
+
+        cfg = load_config()
+        _confirm_workspace_trust_if_prompted(
+            target,
+            normalized_command,
+            timeout_seconds=cfg.spawn_ready_timeout,
+        )
 
         if prompt and _is_claude_command(command):
             # Wait for TUI to be ready before pasting, with configurable fallback
