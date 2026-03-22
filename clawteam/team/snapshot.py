@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
+
 import json
 import re
 import shutil
@@ -73,7 +82,10 @@ def _read_inbox_messages(directory: Path) -> list[dict]:
                 # `.consumed` files. This Unix-only `flock()` probe avoids
                 # active claims, but the result is advisory because the lock is
                 # released before the caller resumes.
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if fcntl:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                elif msvcrt:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError:
                 continue
             try:
@@ -157,7 +169,7 @@ class SnapshotManager:
         tmp.write_text(
             json.dumps(bundle, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        tmp.rename(path)
+        tmp.replace(path)
         return meta
 
     def list_snapshots(self) -> list[SnapshotMeta]:
@@ -270,4 +282,4 @@ class SnapshotManager:
 def _atomic_write(path: Path, data: dict) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.rename(path)
+    tmp.replace(path)

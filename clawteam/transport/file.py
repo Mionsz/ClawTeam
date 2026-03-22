@@ -1,12 +1,27 @@
-"""File-based transport: messages stored as JSON files in inbox directories."""
-
-from __future__ import annotations
-
-import fcntl
 import json
 import time
 import uuid
 from pathlib import Path
+
+try:
+    import fcntl
+    LOCK_EX = fcntl.LOCK_EX
+    LOCK_NB = fcntl.LOCK_NB
+except ImportError:
+    fcntl = None
+    LOCK_EX = 2  # msvcrt.LK_NBLCK
+    LOCK_NB = 0
+
+def try_lock(file_handle) -> bool:
+    try:
+        if fcntl:
+            fcntl.flock(file_handle.fileno(), LOCK_EX | LOCK_NB)
+        else:
+            import msvcrt
+            msvcrt.locking(file_handle.fileno(), LOCK_EX, 1)
+        return True
+    except OSError:
+        return False
 
 from clawteam.team.models import get_data_dir
 from clawteam.transport.base import Transport
@@ -48,11 +63,7 @@ def _is_locked(path: Path) -> bool:
     except Exception:
         return True
     try:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            return True
-        return False
+        return not try_lock(handle)
     finally:
         handle.close()
 
@@ -115,7 +126,7 @@ class FileTransport(Transport):
             if path.suffix == ".json":
                 consumed = path.with_suffix(".consumed")
                 try:
-                    path.rename(consumed)
+                    path.replace(consumed)
                 except OSError:
                     continue
             try:
@@ -124,9 +135,7 @@ class FileTransport(Transport):
                 consumed.unlink(missing_ok=True)
                 continue
 
-            try:
-                fcntl.flock(file_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
+            if not try_lock(file_handle):
                 file_handle.close()
                 continue
             try:
