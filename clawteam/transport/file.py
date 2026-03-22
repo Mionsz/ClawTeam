@@ -3,22 +3,36 @@ import time
 import uuid
 from pathlib import Path
 
-try:
+import sys
+
+if sys.platform == "win32":
+    import msvcrt
+    LOCK_EX = msvcrt.LK_NBLCK
+    LOCK_NB = 0
+else:
     import fcntl
     LOCK_EX = fcntl.LOCK_EX
     LOCK_NB = fcntl.LOCK_NB
-except ImportError:
-    fcntl = None
-    LOCK_EX = 2  # msvcrt.LK_NBLCK
-    LOCK_NB = 0
+
+def unlock(file_handle) -> None:
+    if sys.platform == "win32":
+        try:
+            pos = file_handle.tell()
+            file_handle.seek(0)
+            msvcrt.locking(file_handle.fileno(), msvcrt.LK_UNLCK, 1)
+            file_handle.seek(pos)
+        except OSError:
+            pass
 
 def try_lock(file_handle) -> bool:
     try:
-        if fcntl:
-            fcntl.flock(file_handle.fileno(), LOCK_EX | LOCK_NB)
-        else:
-            import msvcrt
+        if sys.platform == "win32":
+            pos = file_handle.tell()
+            file_handle.seek(0)
             msvcrt.locking(file_handle.fileno(), LOCK_EX, 1)
+            file_handle.seek(pos)
+        else:
+            fcntl.flock(file_handle.fileno(), LOCK_EX | LOCK_NB)
         return True
     except OSError:
         return False
@@ -63,7 +77,10 @@ def _is_locked(path: Path) -> bool:
     except Exception:
         return True
     try:
-        return not try_lock(handle)
+        locked = try_lock(handle)
+        if locked:
+            unlock(handle)
+        return not locked
     finally:
         handle.close()
 
@@ -90,6 +107,7 @@ class FileTransport(Transport):
             try:
                 consumed_path.unlink(missing_ok=True)
             finally:
+                unlock(file_handle)
                 file_handle.close()
 
         def _quarantine(error: str) -> None:
@@ -100,6 +118,7 @@ class FileTransport(Transport):
                 source_name=original_path.name,
                 consumed_path=consumed_path,
             )
+            unlock(file_handle)
             file_handle.close()
 
         return ClaimedMessage(data=data, ack=_ack, quarantine=_quarantine)
@@ -141,6 +160,7 @@ class FileTransport(Transport):
             try:
                 data = file_handle.read()
             except Exception:
+                unlock(file_handle)
                 file_handle.close()
                 consumed.unlink(missing_ok=True)
                 continue

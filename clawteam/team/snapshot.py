@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
+import sys
 
-try:
+if sys.platform == "win32":
     import msvcrt
-except ImportError:
-    msvcrt = None
+else:
+    import fcntl
 
 import json
 import re
@@ -82,10 +79,15 @@ def _read_inbox_messages(directory: Path) -> list[dict]:
                 # `.consumed` files. This Unix-only `flock()` probe avoids
                 # active claims, but the result is advisory because the lock is
                 # released before the caller resumes.
-                if fcntl:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                elif msvcrt:
+                if sys.platform == "win32":
+                    pos = handle.tell()
+                    handle.seek(0)
                     msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    handle.seek(pos)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
                 continue
             try:
