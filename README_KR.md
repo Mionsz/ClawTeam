@@ -27,10 +27,6 @@
 
 [Claude Code](https://claude.ai/claude-code), [Codex](https://openai.com/codex), [OpenClaw](https://github.com/openclaw/openclaw), [nanobot](https://github.com/HKUDS/nanobot), [Cursor](https://cursor.com) 그리고 각종 CLI 에이전트와 폭넓게 호환됩니다.&nbsp;&nbsp;[**English**](README.md) | [**中文文档**](README_CN.md)
 
-<p align="center">
-  <img src="assets/teaser.png" alt="ClawTeam - AI agents orchestrating themselves" width="800">
-</p>
-
 ---
 
 ## 📰 News
@@ -128,18 +124,32 @@
 
 ---
 
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c" controls muted playsinline width="800">
-    <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">데모 비디오 보기</a>
-  </video>
-</p>
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">데모 비디오 직접 열기</a>
-</p>
+<table align="center" width="100%">
+<tr>
+<td width="50%" align="center" style="vertical-align: top; padding: 10px;">
+
+<strong>v0.1.0</strong>
+
+https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c
+
+</td>
+<td width="50%" align="center" style="vertical-align: top; padding: 10px;">
+
+<strong>v0.2.0</strong>
+
+https://github.com/user-attachments/assets/fd23be91-5cf4-457c-a77e-bac24b76e58f
+
+</td>
+</tr>
+</table>
 
 ☝️ 지능형 리더 에이전트가 8대의 H100 GPU에 걸쳐 8개의 전문 서브에이전트를 조율하며, 실시간 성능에 맞춰 자원을 동적으로 재배치하면서 실험을 자율적으로 설계합니다.
 
 🧠 시스템은 팀 전반의 성과를 종합해 전략을 스스로 발전시키며, 사람 개입 없이 연구 자동화를 실현합니다.
+
+<p align="center">
+  <img src="assets/teaser.png" alt="ClawTeam - AI agents orchestrating themselves" width="800">
+</p>
 
 ---
 

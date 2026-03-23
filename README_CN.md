@@ -23,10 +23,6 @@
 
 **一行命令**：给 Agent 一个目标，它自动组建团队完成任务。支持 [Claude Code](https://claude.ai/claude-code)、[Codex](https://openai.com/codex)、[OpenClaw](https://github.com/openclaw/openclaw)、[nanobot](https://github.com/HKUDS/nanobot)、[Cursor](https://cursor.com) 及任意 CLI Agent。&nbsp;&nbsp;[**English**](README.md)
 
-<p align="center">
-  <img src="assets/teaser.png" alt="ClawTeam - Agent 群体智能" width="800">
-</p>
-
 ---
 
 ## 📰 News
@@ -39,16 +35,32 @@
 
 ---
 
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c" controls muted playsinline width="800">
-    <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">观看演示视频</a>
-  </video>
-</p>
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">直接打开演示视频</a>
-</p>
+<table align="center" width="100%">
+<tr>
+<td width="50%" align="center" style="vertical-align: top; padding: 10px;">
 
-*☝️ 一个 Leader Claude Agent 在 8 块 H100 GPU 上自主创建 8 个子 Agent，分配实验方向，监控进度，交叉融合发现，并及时纠正无效方向 —— 全程无人干预。*
+<strong>v0.1.0</strong>
+
+https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c
+
+</td>
+<td width="50%" align="center" style="vertical-align: top; padding: 10px;">
+
+<strong>v0.2.0</strong>
+
+https://github.com/user-attachments/assets/fd23be91-5cf4-457c-a77e-bac24b76e58f
+
+</td>
+</tr>
+</table>
+
+☝️ 智能 Leader Agent 在 8 块 H100 GPU 上编排 8 个专职子 Agent，自主设计实验，并根据实时表现动态重分配资源。
+
+🧠 系统会在团队之间汇总突破、持续调整策略，实现无需人工介入的研究自动化。
+
+<p align="center">
+  <img src="assets/teaser.png" alt="ClawTeam - Agent 群体智能" width="800">
+</p>
 
 ---
 
