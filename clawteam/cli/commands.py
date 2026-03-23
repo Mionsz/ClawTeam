@@ -3017,6 +3017,7 @@ def spawn_agent(
         if skill_parts:
             system_prompt = "\n\n".join(skill_parts)
 
+
     result = be.spawn(
         command=command,
         agent_name=_name,
