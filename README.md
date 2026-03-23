@@ -31,31 +31,13 @@ Full compatibility with [Claude Code](https://claude.ai/claude-code), [Codex](ht
 
 ## 📰 News
 
-| Date | Update |
-|---|---|
-| 2026-03-23 | Spawn/workspace hardening shipped on `main`: fixed conflict detection regression ([#73](https://github.com/HKUDS/ClawTeam/issues/73)), fixed Claude tmux `--dangerously-skip-permissions` startup handling ([#77](https://github.com/HKUDS/ClawTeam/issues/77)), and clarified non-worktree repo prompts while adding `cwd` regression tests for [#78](https://github.com/HKUDS/ClawTeam/issues/78). |
-| 2026-03-23 | Docs landing page refreshed and custom domain support added for `clawteam.us`. |
-| 2026-03-22 | Board/message normalization improvements landed, including cleaner member aliasing and message flow handling. |
-| 2026-03 | The current baseline now includes config management, multi-user workflows, Web UI, P2P transport, and team templates. |
+**2026-03-23** Spawn/workspace hardening landed on `main`: conflict detection regression fixed ([#73](https://github.com/HKUDS/ClawTeam/issues/73)), Claude tmux `--dangerously-skip-permissions` startup handling fixed ([#77](https://github.com/HKUDS/ClawTeam/issues/77)), and non-worktree repo prompts clarified with new `cwd` regression coverage for [#78](https://github.com/HKUDS/ClawTeam/issues/78).
 
-## 🗺️ Milestones
+**2026-03-23** The docs landing page was refreshed and custom domain support for `clawteam.us` was added.
 
-| Milestone | Status | Notes |
-|---|---|---|
-| v0.1.x | ✅ Shipped | Core CLI, team/task/inbox flows, board, templates, packaging. |
-| v0.2.0 | 🚧 Release candidate | Stabilization, docs refresh, spawn/workspace fixes, release cleanup. |
-| v0.3 | 📍 Roadmap | Transport abstraction, broader cross-machine ergonomics, and continued UI/ops polish. |
+**2026-03-22** Board/message normalization improved with cleaner member aliasing and message flow handling.
 
-### 0.2.0 Release Checklist
-
-- [x] Full Python test suite passing
-- [x] Python package builds successfully
-- [x] Website/docs build successfully
-- [ ] Bump package version and regenerate release artifacts
-- [ ] Write GitHub release notes / changelog
-- [ ] Tag and publish `v0.2.0`
-
-For the longer-term plan, see [ROADMAP.md](ROADMAP.md).
+**2026-03** The current baseline includes config management, multi-user workflows, Web UI, P2P transport, and team templates.
 
 ---
 
@@ -766,6 +748,25 @@ All state lives in `~/.clawteam/` as JSON files. No database, no server, no clou
 | **Phase 3** | v0.6 | Agent Marketplace — discover and reuse community agent templates | 💡 Exploring |
 | **Phase 4** | v0.7 | Adaptive Scheduling — dynamically reassign tasks based on agent performance | 💡 Exploring |
 | **Phase 5** | v1.0 | Production-grade — auth, permissions, audit logs | 💡 Exploring |
+
+### Milestones
+
+| Milestone | Status | Notes |
+|---|---|---|
+| v0.1.x | ✅ Shipped | Core CLI, team/task/inbox flows, board, templates, packaging. |
+| v0.2.0 | 🚧 Release candidate | Stabilization, docs refresh, spawn/workspace fixes, release cleanup. |
+| v0.3 | 📍 Roadmap baseline | File + P2P transport, Web UI, multi-user workflow, team templates. |
+
+### 0.2.0 Release Checklist
+
+- [x] Full Python test suite passing
+- [x] Python package builds successfully
+- [x] Website/docs build successfully
+- [ ] Bump package version and regenerate release artifacts
+- [ ] Write GitHub release notes / changelog
+- [ ] Tag and publish `v0.2.0`
+
+For the longer-term plan, see [ROADMAP.md](ROADMAP.md).
 
 ---
 
