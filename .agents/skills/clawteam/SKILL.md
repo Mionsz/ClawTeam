@@ -13,7 +13,7 @@ description: >
   single agent can efficiently handle alone. Provides comprehensive guidance for
   using the ClawTeam CLI to orchestrate multi-agent teams with task management,
   messaging, monitoring, runtime profiles, git context, and recovery tooling.
-version: 0.3.0
+version: 0.3.1
 ---
 
 # ClawTeam Multi-Agent Coordination
@@ -35,7 +35,7 @@ Requires Python 3.10+. For P2P transport support: `pip install clawteam[p2p]`.
 ## Prerequisites
 
 - `tmux` installed (default spawn backend)
-- A CLI coding agent such as `claude`, `codex`, `gemini`, `kimi`, or `nanobot`
+- A CLI coding agent such as `claude`, `codex`, `gemini`, `kimi`, `nanobot`, or `openclaw`
 - A git repository for worktree isolation and context features
 - Default dependencies installed if you want the TUI wizard (`clawteam profile wizard`)
 
@@ -54,7 +54,7 @@ Tasks support dependency chains and priorities.
 
 **Context** — Git/worktree-aware context tools for overlap checks, recent changes, and prompt injection.
 
-**Board** — Terminal kanban dashboard plus gource activity visualization.
+**Board** — Team dashboard with kanban tasks, inbox counts, and message history views, plus gource activity visualization.
 
 ## Quick Start
 
@@ -187,6 +187,10 @@ Common validated CLIs include:
 - `gemini`
 - `kimi`
 - `nanobot`
+- `openclaw`
+
+OpenClaw worker spawns are normalized automatically. Bare `openclaw` commands are promoted to
+the agent entrypoint and wired with `--local`, `--session-id`, and `--message` as needed.
 
 Configure non-default providers through `profile` + `preset` instead of hardcoding env vars into prompts.
 
@@ -227,6 +231,7 @@ clawteam --json task list my-team --status pending
 - All file writes use atomic tmp+rename to prevent corruption.
 - Identity env vars are set automatically when spawning via `clawteam spawn`.
 - Use `board attach <team>` to watch all agents in a tiled tmux layout.
+- `board show` JSON and the browser board now include message history with member-aware aliases, which is useful for inbox triage and handoffs.
 - Prefer `--profile` for non-default providers/models instead of manually exporting provider env vars.
 - `profile` is the final runtime object; `preset` is a reusable template for generating profiles.
 - For Claude Code on a fresh machine/home, run `clawteam profile doctor claude` once before spawning.
