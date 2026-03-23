@@ -130,22 +130,14 @@ Full compatibility with [Claude Code](https://claude.ai/claude-code), [Codex](ht
 
 <strong>v0.1.0 Demo</strong>
 
-<video src="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c" controls muted playsinline width="100%">
-  <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">Watch the v0.1.0 demo video</a>
-</video>
-
-<a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">Open the v0.1.0 demo directly</a>
+https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c
 
 </td>
 <td width="50%" align="center" style="vertical-align: top; padding: 10px;">
 
 <strong>v0.2.0 Release Timeline</strong>
 
-<video src="REPLACE_WITH_V020_TIMELINE_VIDEO_URL" controls muted playsinline width="100%" poster="assets/teaser.png">
-  <a href="REPLACE_WITH_V020_TIMELINE_VIDEO_URL">Open the v0.2.0 release timeline video</a>
-</video>
-
-<a href="REPLACE_WITH_V020_TIMELINE_VIDEO_URL">Replace this placeholder with the published v0.2.0 video URL</a>
+https://github.com/user-attachments/assets/fd23be91-5cf4-457c-a77e-bac24b76e58f
 
 </td>
 </tr>
