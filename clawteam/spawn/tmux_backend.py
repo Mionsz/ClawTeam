@@ -315,12 +315,12 @@ def _confirm_workspace_trust_if_prompted(
     timeout_seconds: float = 5.0,
     poll_interval_seconds: float = 0.2,
 ) -> bool:
-    """Acknowledge first-run workspace trust prompts for interactive CLIs.
+    """Acknowledge startup confirmation prompts for interactive CLIs.
 
     Claude Code and Codex can stop at a directory trust prompt when launched in
-    a fresh git worktree. Detect that specific screen before any prompt
-    injection and accept it with a single Enter so the interactive TUI remains
-    intact.
+    a fresh git worktree. Claude can also pause on a confirmation dialog when
+    `--dangerously-skip-permissions` is enabled. Detect these screens before
+    any prompt injection so the interactive TUI remains intact.
     """
     if not (is_claude_command(command) or is_codex_command(command) or is_gemini_command(command)):
 
@@ -388,7 +388,22 @@ def _is_claude_command(command: list[str]) -> bool:
             text=True,
         )
         pane_text = pane.stdout.lower() if pane.returncode == 0 else ""
-        if _looks_like_workspace_trust_prompt(command, pane_text):
+        action = _startup_prompt_action(command, pane_text)
+        if action == "enter":
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, "Enter"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            time.sleep(0.5)
+            return True
+        if action == "down-enter":
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, "-l", "\x1b[B"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            time.sleep(0.2)
             subprocess.run(
                 ["tmux", "send-keys", "-t", target, "Enter"],
                 stdout=subprocess.PIPE,
@@ -400,6 +415,15 @@ def _is_claude_command(command: list[str]) -> bool:
         time.sleep(poll_interval_seconds)
 
     return False
+
+
+def _startup_prompt_action(command: list[str], pane_text: str) -> str | None:
+    """Return the key action needed to dismiss a startup confirmation prompt."""
+    if _looks_like_claude_skip_permissions_prompt(command, pane_text):
+        return "down-enter"
+    if _looks_like_workspace_trust_prompt(command, pane_text):
+        return "enter"
+    return None
 
 
 def _looks_like_workspace_trust_prompt(command: list[str], pane_text: str) -> bool:
@@ -422,6 +446,21 @@ def _looks_like_workspace_trust_prompt(command: list[str], pane_text: str) -> bo
         return "trust folder" in pane_text or "trust parent folder" in pane_text
 
     return False
+
+
+def _looks_like_claude_skip_permissions_prompt(command: list[str], pane_text: str) -> bool:
+    """Return True when Claude is waiting for the dangerous-permissions confirmation."""
+    if not pane_text or not is_claude_command(command):
+        return False
+
+    has_accept_choice = "yes, i accept" in pane_text
+    has_permissions_warning = (
+        "dangerously-skip-permissions" in pane_text
+        or "skip permissions" in pane_text
+        or "permission" in pane_text
+        or "approval" in pane_text
+    )
+    return has_accept_choice and has_permissions_warning
 
 
 def _wait_for_cli_ready(

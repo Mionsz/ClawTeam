@@ -411,6 +411,37 @@ def test_tmux_backend_confirms_claude_workspace_trust_prompt(monkeypatch):
     assert ["tmux", "send-keys", "-t", "demo:agent", "Enter"] in run_calls
 
 
+def test_tmux_backend_confirms_claude_skip_permissions_prompt(monkeypatch):
+    run_calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode: int = 0, stdout: str = ""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(args, **kwargs):
+        run_calls.append(args)
+        if args[:4] == ["tmux", "capture-pane", "-p", "-t"]:
+            return Result(
+                stdout=(
+                    "Dangerous permission mode\n"
+                    "Using --dangerously-skip-permissions\n"
+                    "Yes, I accept\n"
+                )
+            )
+        return Result()
+
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.time.sleep", lambda *_: None)
+
+    confirmed = _confirm_workspace_trust_if_prompted("demo:agent", ["claude"])
+
+    assert confirmed is True
+    assert ["tmux", "send-keys", "-t", "demo:agent", "-l", "\x1b[B"] in run_calls
+    assert ["tmux", "send-keys", "-t", "demo:agent", "Enter"] in run_calls
+
+
 def test_tmux_backend_confirms_codex_workspace_trust_prompt(monkeypatch):
     run_calls: list[list[str]] = []
 
