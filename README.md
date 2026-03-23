@@ -124,6 +124,7 @@ Full compatibility with [Claude Code](https://claude.ai/claude-code), [Codex](ht
 
 ---
 
+<p align="center"><strong>v0.1.0 Demo</strong></p>
 <p align="center">
   <video src="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c" controls muted playsinline width="800">
     <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">Watch the demo video</a>
@@ -137,6 +138,26 @@ Full compatibility with [Claude Code](https://claude.ai/claude-code), [Codex](ht
 ☝️ Intelligent leader agent orchestrates 8 specialized sub-agents across 8 H100 GPUs, autonomously designing experiments and dynamically reallocating resources based on real-time performance.
 
 🧠 The system synthesizes breakthroughs across teams and evolves strategies independently — achieving full research automation without human intervention.
+
+<p align="center"><strong>v0.2.0 Release Timeline</strong></p>
+<p align="center">
+  <video src="REPLACE_WITH_V020_TIMELINE_VIDEO_URL" controls muted playsinline width="800" poster="assets/teaser.png">
+    <a href="REPLACE_WITH_V020_TIMELINE_VIDEO_URL">Open the v0.2.0 release timeline video</a>
+  </video>
+</p>
+<p align="center">
+  <a href="REPLACE_WITH_V020_TIMELINE_VIDEO_URL">Replace this placeholder with the published v0.2.0 timeline video URL</a>
+</p>
+
+<table align="center" width="800">
+<tr>
+<td align="center"><strong>2026-03-18</strong><br>Project launch</td>
+<td align="center"><strong>→</strong></td>
+<td align="center"><strong>2026-03-23</strong><br>`v0.2.0` released</td>
+<td align="center"><strong>→</strong></td>
+<td align="center"><strong>Baseline</strong><br>Config, multi-user workflow, Web UI, P2P, templates</td>
+</tr>
+</table>
 
 <p align="center">
   <img src="assets/teaser.png" alt="ClawTeam - AI agents orchestrating themselves" width="800">
