@@ -32,6 +32,7 @@ def register_agent(
         "tmux_target": tmux_target,
         "pid": pid,
         "command": command or [],
+        "spawned_at": time.time(),
     }
     _save(path, registry)
 
@@ -75,6 +76,34 @@ def list_dead_agents(team_name: str) -> list[str]:
         if alive is False:
             dead.append(name)
     return dead
+
+
+def list_zombie_agents(team_name: str, max_hours: float = 2.0) -> list[dict]:
+    """Return agents that are still alive but have been running longer than max_hours.
+
+    Each entry contains: agent_name, pid, backend, spawned_at (unix ts), running_hours.
+    Agents with no spawned_at recorded are skipped (legacy registry entries).
+    """
+    registry = get_registry(team_name)
+    threshold = max_hours * 3600
+    now = time.time()
+    zombies = []
+    for name, info in registry.items():
+        spawned_at = info.get("spawned_at")
+        if not spawned_at:
+            continue
+        alive = is_agent_alive(team_name, name)
+        if alive is True:
+            running_seconds = now - spawned_at
+            if running_seconds > threshold:
+                zombies.append({
+                    "agent_name": name,
+                    "pid": info.get("pid", 0),
+                    "backend": info.get("backend", ""),
+                    "spawned_at": spawned_at,
+                    "running_hours": round(running_seconds / 3600, 1),
+                })
+    return zombies
 
 
 def stop_agent(team_name: str, agent_name: str, timeout_seconds: float = 3.0) -> bool | None:
