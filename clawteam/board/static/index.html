@@ -792,8 +792,11 @@
         try {
             if (url) {
                 btn.innerText = 'Fetching Data...';
-                const resp = await fetch(url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/'));
-                if (!resp.ok) throw new Error("Failed to fetch URL");
+                const proxyUrl = '/api/proxy?url=' + encodeURIComponent(url);
+                const resp = await fetch(proxyUrl);
+                if (!resp.ok) {
+                    throw new Error("Failed to fetch URL content. Server returned status: " + resp.status);
+                }
                 const text = await resp.text();
                 description += "\\n\\n--- Extracted Context ---\\n\\n" + text;
             }

@@ -65,6 +65,39 @@ class BoardHandler(BaseHTTPRequestHandler):
                 self.send_error(400, "Team name required")
                 return
             self._serve_sse(team_name)
+        elif path.startswith("/api/proxy"):
+            from urllib.parse import urlparse, parse_qs
+            import urllib.request
+            query = parse_qs(urlparse(self.path).query)
+            target_url = query.get("url", [""])[0]
+            if not target_url:
+                self.send_error(400, "URL required")
+                return
+            try:
+                # If github URL, convert to api.github.com/repos/.../readme
+                if "github.com" in target_url and "raw.githubusercontent.com" not in target_url:
+                    parsed = urlparse(target_url)
+                    parts = [p for p in parsed.path.split("/") if p]
+                    if len(parts) == 2:
+                        api_url = f"https://api.github.com/repos/{parts[0]}/{parts[1]}/readme"
+                        req = urllib.request.Request(api_url, headers={"User-Agent": "ClawTeam-Server"})
+                        with urllib.request.urlopen(req) as resp:
+                            import json
+                            data = json.loads(resp.read().decode())
+                            target_url = data.get("download_url", target_url)
+                    else:
+                        target_url = target_url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+                
+                req = urllib.request.Request(target_url, headers={"User-Agent": "ClawTeam-Server"})
+                with urllib.request.urlopen(req) as resp:
+                    content = resp.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(content)
+            except Exception as e:
+                self.send_error(500, str(e))
         else:
             self.send_error(404)
 
