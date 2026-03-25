@@ -91,6 +91,18 @@ class TestTaskUpdate:
         t2 = store.create("main")
         updated = store.update(t2.id, add_blocked_by=[t1.id])
         assert t1.id in updated.blocked_by
+        assert updated.status == TaskStatus.blocked
+
+    def test_update_rejects_self_cycle(self, store):
+        t1 = store.create("self")
+        with pytest.raises(ValueError, match="cannot be blocked by itself"):
+            store.update(t1.id, add_blocked_by=[t1.id])
+
+    def test_update_rejects_two_task_cycle(self, store):
+        t1 = store.create("a")
+        t2 = store.create("b", blocked_by=[t1.id])
+        with pytest.raises(ValueError, match="cannot contain cycles"):
+            store.update(t1.id, add_blocked_by=[t2.id])
 
     def test_update_metadata_merge(self, store):
         t = store.create("m", metadata={"a": 1})

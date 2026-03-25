@@ -45,11 +45,11 @@ class TestPrepareCommandSkipPermissions:
 
     adapter = NativeCliAdapter()
 
-    def test_qwen_gets_dangerously_skip_permissions(self):
+    def test_qwen_gets_yolo(self):
         result = self.adapter.prepare_command(
             ["qwen"], skip_permissions=True,
         )
-        assert "--dangerously-skip-permissions" in result.final_command
+        assert "--yolo" in result.final_command
 
     def test_opencode_gets_yolo(self):
         result = self.adapter.prepare_command(

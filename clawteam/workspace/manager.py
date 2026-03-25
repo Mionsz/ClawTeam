@@ -64,16 +64,17 @@ class WorkspaceManager:
         branch = f"clawteam/{team_name}/{agent_name}"
         wt_path = _workspaces_root() / team_name / agent_name
 
-        # Crash recovery: if worktree already exists, clean it up first
+        # Crash recovery: stale branch metadata can survive after the physical
+        # worktree directory is deleted, so clear both path and branch state.
         if wt_path.exists():
             try:
                 git.remove_worktree(self.repo_root, wt_path)
             except git.GitError:
                 pass
-            try:
-                git.delete_branch(self.repo_root, branch)
-            except git.GitError:
-                pass
+        try:
+            git.delete_branch(self.repo_root, branch)
+        except git.GitError:
+            pass
 
         git.create_worktree(
             self.repo_root, wt_path, branch, base_ref=self.base_branch,

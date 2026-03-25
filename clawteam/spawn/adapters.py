@@ -35,13 +35,14 @@ class NativeCliAdapter:
         post_launch_prompt = None
 
         if skip_permissions:
-            if is_claude_command(normalized_command) or is_qwen_command(normalized_command):
+            if is_claude_command(normalized_command):
                 final_command.append("--dangerously-skip-permissions")
             elif is_codex_command(normalized_command):
                 final_command.append("--dangerously-bypass-approvals-and-sandbox")
             elif (
                 is_gemini_command(normalized_command)
                 or is_kimi_command(normalized_command)
+                or is_qwen_command(normalized_command)
                 or is_opencode_command(normalized_command)
             ):
                 final_command.append("--yolo")

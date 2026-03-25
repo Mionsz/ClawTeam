@@ -210,6 +210,36 @@ def test_spawn_cli_auto_creates_team_for_orchestrator(monkeypatch, tmp_path):
     assert team.members[0].agent_type == "orchestrator"
 
 
+def test_spawn_cli_auto_creates_team_for_general_purpose_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "spawn",
+            "tmux",
+            "claude",
+            "--team",
+            "auto-team",
+            "--agent-name",
+            "worker",
+            "--no-workspace",
+            "--task",
+            "Hello",
+        ],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 0
+    team = TeamManager.get_team("auto-team")
+    assert team is not None
+    assert team.members[0].name == "worker"
+    assert team.members[0].agent_type == "general-purpose"
+
+
 def test_spawn_cli_rolls_back_auto_created_team_on_spawn_error(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
     monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: ErrorBackend())

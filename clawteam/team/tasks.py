@@ -94,6 +94,7 @@ class TaskStore:
             blocked_by=blocked_by or [],
             metadata=metadata or {},
         )
+        self._validate_blocked_by_unlocked(task.id, task.blocked_by)
         if task.blocked_by:
             task.status = TaskStatus.blocked
         with self._write_lock():
@@ -168,9 +169,14 @@ class TaskStore:
                     if b not in task.blocks:
                         task.blocks.append(b)
             if add_blocked_by:
+                proposed_blocked_by = list(task.blocked_by)
                 for b in add_blocked_by:
-                    if b not in task.blocked_by:
-                        task.blocked_by.append(b)
+                    if b not in proposed_blocked_by:
+                        proposed_blocked_by.append(b)
+                self._validate_blocked_by_unlocked(task.id, proposed_blocked_by)
+                task.blocked_by = proposed_blocked_by
+                if task.blocked_by and task.status == TaskStatus.pending:
+                    task.status = TaskStatus.blocked
             if metadata:
                 task.metadata.update(metadata)
             task.updated_at = _now_iso()
@@ -288,6 +294,36 @@ class TaskStore:
             "timed_completed": len(durations),
             "avg_duration_seconds": round(avg_duration, 2),
         }
+
+    def _validate_blocked_by_unlocked(self, task_id: str, blocked_by: list[str]) -> None:
+        if task_id in blocked_by:
+            raise ValueError(f"Task '{task_id}' cannot be blocked by itself")
+
+        graph: dict[str, list[str]] = {
+            task.id: list(task.blocked_by)
+            for task in self._list_tasks_unlocked()
+        }
+        graph[task_id] = list(blocked_by)
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def _visit(node: str) -> bool:
+            if node in visiting:
+                return True
+            if node in visited:
+                return False
+            visiting.add(node)
+            for dep in graph.get(node, []):
+                if dep in graph and _visit(dep):
+                    return True
+            visiting.remove(node)
+            visited.add(node)
+            return False
+
+        for node in graph:
+            if _visit(node):
+                raise ValueError("Task dependencies cannot contain cycles")
 
     def _save_unlocked(self, task: TaskItem) -> None:
         path = _task_path(self.team_name, task.id)

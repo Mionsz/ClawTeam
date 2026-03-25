@@ -1767,14 +1767,18 @@ def task_create(
     blocks_list = [b.strip() for b in blocks.split(",") if b.strip()] if blocks else []
     blocked_by_list = [b.strip() for b in blocked_by.split(",") if b.strip()] if blocked_by else []
 
-    task = store.create(
-        subject=subject,
-        description=description,
-        owner=owner or "",
-        priority=TaskPriority(priority),
-        blocks=blocks_list,
-        blocked_by=blocked_by_list,
-    )
+    try:
+        task = store.create(
+            subject=subject,
+            description=description,
+            owner=owner or "",
+            priority=TaskPriority(priority),
+            blocks=blocks_list,
+            blocked_by=blocked_by_list,
+        )
+    except ValueError as e:
+        _output({"error": str(e)}, lambda d: console.print(f"[red]{d['error']}[/red]"))
+        raise typer.Exit(1)
 
     data = _dump(task)
     _output(data, lambda d: (
@@ -1862,6 +1866,9 @@ def task_update(
         )
     except TaskLockError as e:
         _output({"error": str(e)}, lambda d: console.print(f"[red]Lock conflict: {d['error']}[/red]"))
+        raise typer.Exit(1)
+    except ValueError as e:
+        _output({"error": str(e)}, lambda d: console.print(f"[red]{d['error']}[/red]"))
         raise typer.Exit(1)
 
     if not task:
@@ -2732,7 +2739,7 @@ def spawn_agent(
     from clawteam.team.manager import TeamManager
     team_created = False
     member_added = False
-    if TeamManager.get_team(_team) is None and agent_type in {"leader", "orchestrator"}:
+    if TeamManager.get_team(_team) is None:
         TeamManager.create_team(
             name=_team,
             leader_name=_name,

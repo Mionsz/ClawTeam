@@ -90,6 +90,35 @@ def test_task_cli_supports_priority_create_update_and_list(tmp_path):
     assert "Priority: low" in get_result.output
 
 
+def test_task_cli_rejects_circular_dependencies(tmp_path):
+    runner = CliRunner()
+    env = {
+        "HOME": str(tmp_path),
+        "CLAWTEAM_DATA_DIR": str(tmp_path / ".clawteam"),
+    }
+
+    first = runner.invoke(app, ["task", "create", "demo", "first"], env=env)
+    second = runner.invoke(
+        app,
+        ["task", "create", "demo", "second", "--blocked-by", first.output.split("Task created: ")[1].splitlines()[0].strip()],
+        env=env,
+    )
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+
+    first_id = first.output.split("Task created: ")[1].splitlines()[0].strip()
+    second_id = second.output.split("Task created: ")[1].splitlines()[0].strip()
+    result = runner.invoke(
+        app,
+        ["task", "update", "demo", first_id, "--add-blocked-by", second_id],
+        env=env,
+    )
+
+    assert result.exit_code == 1
+    assert "cannot contain cycles" in result.output
+
+
 def test_team_status_uses_configured_timezone(tmp_path):
     runner = CliRunner()
     env = {

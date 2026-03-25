@@ -1038,7 +1038,7 @@ def test_tmux_backend_qwen_skip_permissions_and_prompt(monkeypatch, tmp_path):
     assert "spawned" in result
     new_session = next(c for c in run_calls if c[:3] == ["tmux", "new-session", "-d"])
     full_cmd = new_session[-1]
-    assert " qwen --dangerously-skip-permissions -p 'refactor this';" in full_cmd
+    assert " qwen --yolo -p 'refactor this';" in full_cmd
 
 
 def test_tmux_backend_opencode_skip_permissions_and_prompt(monkeypatch, tmp_path):
@@ -1094,7 +1094,7 @@ def test_subprocess_backend_qwen_skip_permissions_and_prompt(monkeypatch, tmp_pa
         skip_permissions=True,
     )
 
-    assert "qwen --dangerously-skip-permissions -p 'refactor this'" in captured["cmd"]
+    assert "qwen --yolo -p 'refactor this'" in captured["cmd"]
 
 
 def test_subprocess_backend_opencode_skip_permissions_and_prompt(monkeypatch, tmp_path):
