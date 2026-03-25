@@ -68,6 +68,29 @@ class BoardHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        if path.startswith("/api/team/") and path.endswith("/task"):
+            parts = path.strip("/").split("/")
+            if len(parts) == 4 and parts[3] == "task":
+                team_name = parts[2]
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8")
+                try:
+                    payload = json.loads(body)
+                    from clawteam.team.tasks import TaskStore
+                    store = TaskStore(team_name)
+                    task = store.create(
+                        subject=payload.get("subject", ""),
+                        description=payload.get("description", ""),
+                        owner=payload.get("owner", "")
+                    )
+                    self._serve_json({"status": "ok", "task_id": task.id})
+                except Exception as e:
+                    self.send_error(400, str(e))
+                return
+        self.send_error(404)
+
     def _serve_static(self, filename: str, content_type: str):
         filepath = _STATIC_DIR / filename
         if not filepath.exists():
