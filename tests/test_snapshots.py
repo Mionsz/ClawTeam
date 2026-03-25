@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from clawteam.transport.file import try_lock
 from clawteam.team.costs import CostStore
 from clawteam.team.manager import TeamManager
 from clawteam.team.models import get_data_dir
 from clawteam.team.snapshot import SnapshotManager, SnapshotMeta, _snapshots_root
 from clawteam.team.tasks import TaskStore
+from clawteam.transport.file import try_lock
 
 
 def _setup_team(team_name: str) -> None:

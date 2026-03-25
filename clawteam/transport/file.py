@@ -1,18 +1,24 @@
 import json
+import sys
 import time
 import uuid
 from pathlib import Path
 
-import sys
-
 if sys.platform == "win32":
     import msvcrt
+
     LOCK_EX = msvcrt.LK_NBLCK
     LOCK_NB = 0
 else:
     import fcntl
+
     LOCK_EX = fcntl.LOCK_EX
     LOCK_NB = fcntl.LOCK_NB
+
+from clawteam.team.models import get_data_dir
+from clawteam.transport.base import Transport
+from clawteam.transport.claimed import ClaimedMessage
+
 
 def unlock(file_handle) -> None:
     if sys.platform == "win32":
@@ -23,6 +29,7 @@ def unlock(file_handle) -> None:
             file_handle.seek(pos)
         except OSError:
             pass
+
 
 def try_lock(file_handle) -> bool:
     try:
@@ -36,10 +43,6 @@ def try_lock(file_handle) -> bool:
         return True
     except OSError:
         return False
-
-from clawteam.team.models import get_data_dir
-from clawteam.transport.base import Transport
-from clawteam.transport.claimed import ClaimedMessage
 
 
 def _teams_root() -> Path:

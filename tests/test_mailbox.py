@@ -371,14 +371,14 @@ class TestFileTransport:
         message_files = list(inbox.glob("msg-*.json"))
         assert len(message_files) == 1
 
-        original_rename = Path.rename
+        original_replace = Path.replace
 
-        def fake_rename(self, target):
+        def fake_replace(self, target):
             if self == message_files[0]:
                 raise OSError("claimed by another consumer")
-            return original_rename(self, target)
+            return original_replace(self, target)
 
-        monkeypatch.setattr(Path, "rename", fake_rename)
+        monkeypatch.setattr(Path, "replace", fake_replace)
 
         assert transport.fetch("bob", consume=True) == []
         assert len(list(inbox.glob("msg-*.json"))) == 1
