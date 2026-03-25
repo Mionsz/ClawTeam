@@ -93,6 +93,13 @@ def build_agent_prompt(
         f'  `clawteam inbox send {team_name} {leader_name} "Need help: <description>"`',
         f"- After finishing work, report your costs: `clawteam cost report {team_name} --input-tokens <N> --output-tokens <N> --cost-cents <N>`",
         f"- Before finishing, save your session: `clawteam session save {team_name} --session-id <id>`",
+        "- Do not exit after the first task unless the leader explicitly tells you to stop.",
+        "",
+        "## Worker Loop Protocol\n",
+        f"- After finishing your current task batch, re-check `clawteam task list {team_name} --owner {agent_name}`.",
+        f"- Then check for new instructions with `clawteam inbox receive {team_name} --agent {agent_name}`.",
+        f"- If you become idle, notify the leader with `clawteam lifecycle idle {team_name}` and continue checking for new work.",
+        "- Repeat this loop until the leader confirms shutdown or there is truly no more work to do.",
         "",
     ])
     return "\n".join(lines)

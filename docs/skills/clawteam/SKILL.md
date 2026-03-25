@@ -152,6 +152,23 @@ clawteam task wait my-team --agent coordinator
 clawteam --json task wait my-team --timeout 600
 ```
 
+### Worker Loop Protocol
+
+Workers should not stop after completing the initial `--task`. The expected loop is:
+
+```bash
+# 1. Check tasks assigned to you
+clawteam task list my-team --owner worker1
+
+# 2. Finish any pending work, then check for new instructions
+clawteam inbox receive my-team --agent worker1
+
+# 3. If idle, notify the leader and keep monitoring for follow-ups
+clawteam lifecycle idle my-team
+```
+
+Repeat the loop until the leader explicitly shuts the worker down.
+
 ### Git Context and Conflict Checks
 
 ```bash
@@ -226,6 +243,7 @@ clawteam --json task list my-team --status pending
 - Task status `blocked` is auto-set when `--blocked-by` is specified at creation.
 - Completing a task auto-unblocks tasks that list it in `blockedBy`.
 - Tasks also support `priority`; use `high` for urgent unblockers and production fixes.
+- Workers are expected to keep polling tasks/inbox after the first task instead of exiting immediately.
 - `clawteam spawn` defaults to tmux, git worktree isolation, and skip-permissions.
 - `clawteam launch` also respects `skip_permissions`, so template workers no longer stall on approval prompts.
 - All file writes use atomic tmp+rename to prevent corruption.

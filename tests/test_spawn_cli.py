@@ -87,6 +87,22 @@ def test_spawn_cli_rejects_removed_acpx_backend(monkeypatch, tmp_path):
     assert "Unknown spawn backend: acpx. Available: subprocess, tmux" in result.output
 
 
+def test_spawn_cli_invalid_backend_hint_mentions_team_flag(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["spawn", "demo-team", "claude", "--agent-name", "alice", "--no-workspace"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 1
+    assert "the first" in result.output
+    assert "positional argument to `clawteam spawn` is the backend" in result.output
+    assert "--team <name>" in result.output
+
+
 def test_launch_cli_rejects_removed_acpx_backend(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
     monkeypatch.chdir(tmp_path)

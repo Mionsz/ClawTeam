@@ -90,3 +90,13 @@ class TestBuildAgentPrompt:
         assert "clawteam inbox send my-team boss" in prompt
         assert "clawteam cost report my-team" in prompt
         assert "commit your changes in this repository with git" in prompt
+
+    def test_prompt_includes_worker_loop_protocol(self):
+        prompt = build_agent_prompt(
+            agent_name="dev", agent_id="id", agent_type="t",
+            team_name="my-team", leader_name="boss", task="task",
+        )
+        assert "Worker Loop Protocol" in prompt
+        assert "Do not exit after the first task" in prompt
+        assert "clawteam inbox receive my-team --agent dev" in prompt
+        assert "clawteam lifecycle idle my-team" in prompt

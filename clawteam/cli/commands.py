@@ -84,6 +84,17 @@ def _output(data: dict | list, human_fn=None):
         print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
+def _spawn_backend_hint(backend: str | None, team: str | None) -> str:
+    """Return a helpful hint when spawn positional args are misordered."""
+    if not backend or team:
+        return ""
+    return (
+        " Hint: the first positional argument to `clawteam spawn` is the backend "
+        "(`tmux` or `subprocess`), not the team name. Use `--team <name>` to set "
+        "the team explicitly."
+    )
+
+
 def _parse_key_value_items(items: list[str], *, label: str) -> dict[str, str]:
     """Parse repeated KEY=VALUE CLI options into a dict."""
     parsed: dict[str, str] = {}
@@ -1190,7 +1201,8 @@ def team_request_join(
     team: str = typer.Argument(..., help="Team name"),
     proposed_name: str = typer.Argument(..., help="Proposed agent name"),
     capabilities: str = typer.Option("", "--capabilities", "-c", help="Agent capabilities"),
-    timeout: int = typer.Option(60, "--timeout", "-t", help="Timeout in seconds"),
+    timeout: int = typer.Option(300, "--timeout", "-t", help="Timeout in seconds while waiting for leader response"),
+    wait_for_response: bool = typer.Option(True, "--wait/--no-wait", help="Wait for leader approval before returning"),
 ):
     """Request to join a team (requestJoin). Blocks waiting for leader response."""
     from clawteam.identity import AgentIdentity
@@ -1223,6 +1235,24 @@ def team_request_join(
         capabilities=capabilities or None,
     )
 
+    pending_result = {
+        "status": "pending",
+        "requestId": request_id,
+        "teamName": team,
+        "proposedName": proposed_name,
+    }
+
+    if not wait_for_response:
+        _output(
+            pending_result,
+            lambda d: console.print(
+                f"[green]OK[/green] Join request sent to leader '{leader_name}'. "
+                f"Request id: {d['requestId']}. Check later with "
+                f"`clawteam team join-status {team} {d['requestId']} --proposed-name {proposed_name}`"
+            ),
+        )
+        return
+
     if not _json_output:
         console.print(f"Join request sent to leader '{leader_name}'. Waiting for response...")
 
@@ -1253,10 +1283,70 @@ def team_request_join(
         time.sleep(1.0)
 
     _output(
-        {"status": "timeout", "requestId": request_id},
-        lambda d: console.print("[yellow]Timeout waiting for response.[/yellow]"),
+        pending_result,
+        lambda d: console.print(
+            "[yellow]Still pending.[/yellow] The join request was sent successfully but no leader response "
+            f"arrived within {timeout}s. Check later with "
+            f"`clawteam team join-status {team} {d['requestId']} --proposed-name {proposed_name}`."
+        ),
     )
-    raise typer.Exit(1)
+
+
+@team_app.command("join-status")
+def team_join_status(
+    team: str = typer.Argument(..., help="Team name"),
+    request_id: str = typer.Argument(..., help="Join request ID"),
+    proposed_name: Optional[str] = typer.Option(None, "--proposed-name", help="Proposed agent name used when requesting access"),
+):
+    """Check the status of a join request without resubmitting it."""
+    from clawteam.identity import AgentIdentity
+    from clawteam.team.mailbox import MailboxManager
+    from clawteam.team.models import MessageType
+
+    identity = AgentIdentity.from_env()
+    mailbox = MailboxManager(team)
+    temp_inbox_name = f"_pending_{proposed_name or identity.agent_name}"
+    messages = mailbox.peek(temp_inbox_name)
+
+    for msg in messages:
+        if msg.request_id != request_id:
+            continue
+        if msg.type == MessageType.join_approved:
+            _output(
+                {
+                    "status": "approved",
+                    "requestId": request_id,
+                    "assignedName": msg.assigned_name or proposed_name or identity.agent_name,
+                    "agentId": msg.agent_id or "",
+                    "teamName": msg.team_name or team,
+                },
+                lambda d: console.print(
+                    f"[green]Approved![/green] Joined as '{d['assignedName']}'"
+                ),
+            )
+            return
+        if msg.type == MessageType.join_rejected:
+            _output(
+                {
+                    "status": "rejected",
+                    "requestId": request_id,
+                    "reason": msg.reason or msg.content or "",
+                },
+                lambda d: console.print(f"[red]Rejected.[/red] {d['reason']}"),
+            )
+            return
+
+    _output(
+        {
+            "status": "pending",
+            "requestId": request_id,
+            "teamName": team,
+            "proposedName": proposed_name or identity.agent_name,
+        },
+        lambda d: console.print(
+            f"[yellow]Pending.[/yellow] No approval or rejection found yet for request '{request_id}'."
+        ),
+    )
 
 
 @team_app.command("approve-join")
@@ -1318,6 +1408,40 @@ def team_approve_join(
     _output(
         {"status": "approved", "requestId": request_id, "assignedName": final_name, "agentId": new_agent_id, "teamName": team},
         lambda d: console.print(f"[green]OK[/green] Approved '{final_name}' (id: {new_agent_id})"),
+    )
+
+
+@team_app.command("add-member")
+def team_add_member(
+    team: str = typer.Argument(..., help="Team name"),
+    member_name: str = typer.Argument(..., help="Member name"),
+    agent_type: str = typer.Option("general-purpose", "--agent-type", help="Agent type"),
+    agent_id: Optional[str] = typer.Option(None, "--agent-id", help="Agent ID (default: auto-generated)"),
+):
+    """Directly add a member to a team without request/approve handshake."""
+    from clawteam.identity import AgentIdentity
+    from clawteam.team.manager import TeamManager
+
+    identity = AgentIdentity.from_env()
+    resolved_agent_id = agent_id or uuid.uuid4().hex[:12]
+
+    try:
+        member = TeamManager.add_member(
+            team_name=team,
+            member_name=member_name,
+            agent_id=resolved_agent_id,
+            agent_type=agent_type,
+            user=identity.user,
+        )
+    except ValueError as e:
+        _output({"error": str(e)}, lambda d: console.print(f"[red]Error: {d['error']}[/red]"))
+        raise typer.Exit(1)
+
+    _output(
+        {"status": "added", "team": team, "member": _dump(member)},
+        lambda d: console.print(
+            f"[green]OK[/green] Added member '{d['member']['name']}' to team '{d['team']}'"
+        ),
     )
 
 
@@ -1754,7 +1878,7 @@ def task_create(
     team: str = typer.Argument(..., help="Team name"),
     subject: str = typer.Argument(..., help="Task subject"),
     description: str = typer.Option("", "--description", "-d", help="Task description"),
-    owner: Optional[str] = typer.Option(None, "--owner", "-o", help="Owner agent name"),
+    owner: Optional[str] = typer.Option(None, "--owner", "--agent", "-o", "-a", help="Owner agent name"),
     priority: str = typer.Option("medium", "--priority", "-p", help="Task priority: low, medium, high, urgent"),
     blocks: Optional[str] = typer.Option(None, "--blocks", help="Comma-separated task IDs this blocks"),
     blocked_by: Optional[str] = typer.Option(None, "--blocked-by", help="Comma-separated task IDs this is blocked by"),
@@ -1830,7 +1954,7 @@ def task_update(
     team: str = typer.Argument(..., help="Team name"),
     task_id: str = typer.Argument(..., help="Task ID"),
     status: Optional[str] = typer.Option(None, "--status", "-s", help="New status: pending, in_progress, completed, blocked"),
-    owner: Optional[str] = typer.Option(None, "--owner", "-o", help="New owner"),
+    owner: Optional[str] = typer.Option(None, "--owner", "--agent", "-o", "-a", help="New owner"),
     subject: Optional[str] = typer.Option(None, "--subject", help="New subject"),
     description: Optional[str] = typer.Option(None, "--description", "-d", help="New description"),
     priority: Optional[str] = typer.Option(None, "--priority", "-p", help="New priority: low, medium, high, urgent"),
@@ -1883,7 +2007,7 @@ def task_update(
 def task_list(
     team: str = typer.Argument(..., help="Team name"),
     status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status"),
-    owner: Optional[str] = typer.Option(None, "--owner", "-o", help="Filter by owner"),
+    owner: Optional[str] = typer.Option(None, "--owner", "--agent", "-o", "-a", help="Filter by owner"),
     priority: Optional[str] = typer.Option(None, "--priority", "-p", help="Filter by priority: low, medium, high, urgent"),
     sort_priority: bool = typer.Option(False, "--sort-priority", help="Sort by priority (urgent first)"),
 ):
@@ -2690,7 +2814,8 @@ def spawn_agent(
     try:
         be = get_backend(backend)
     except ValueError as e:
-        _output({"error": str(e)}, lambda d: console.print(f"[red]{d['error']}[/red]"))
+        message = str(e) + _spawn_backend_hint(backend, team)
+        _output({"error": message}, lambda d: console.print(f"[red]{d['error']}[/red]"))
         raise typer.Exit(1)
 
     # Workspace: resolve from flag or config (default: auto)
@@ -2919,6 +3044,35 @@ def board_show(
         raise typer.Exit(1)
 
     _output(data, lambda d: BoardRenderer(console).render_team_board(d))
+
+
+@board_app.command("update")
+def board_update(
+    team: str = typer.Argument(..., help="Team name"),
+    agent: Optional[str] = typer.Option(None, "--agent", "-a", help="Compatibility alias; board state is team-wide"),
+):
+    """Compatibility alias: board state is derived from tasks and inbox messages."""
+    from clawteam.board.collector import BoardCollector
+
+    collector = BoardCollector()
+    try:
+        collector.collect_team(team)
+    except ValueError as e:
+        _output({"error": str(e)}, lambda d: console.print(f"[red]{d['error']}[/red]"))
+        raise typer.Exit(1)
+
+    _output(
+        {
+            "status": "up_to_date",
+            "team": team,
+            "agent": agent,
+            "note": "Board state is derived automatically from task and inbox updates.",
+        },
+        lambda d: console.print(
+            "[green]OK[/green] Board state is already derived automatically from tasks and inbox messages. "
+            "Use `clawteam task create/update` to change it, then `clawteam board show` or `board live` to refresh the view."
+        ),
+    )
 
 
 @board_app.command("overview")
