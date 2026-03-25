@@ -24,6 +24,10 @@ def test_config_cli_supports_all_keys_and_bool_values(tmp_path):
     assert result.exit_code == 0
     assert load_config().workspace == "never"
 
+    result = runner.invoke(app, ["config", "set", "default_profile", "gemini-main"], env=env)
+    assert result.exit_code == 0
+    assert load_config().default_profile == "gemini-main"
+
     result = runner.invoke(app, ["config", "get", "workspace"], env=env)
     assert result.exit_code == 0
     assert "workspace = never" in result.output

@@ -2764,14 +2764,17 @@ def spawn_agent(
     """
     from clawteam.config import get_effective
     from clawteam.spawn import get_backend
-    from clawteam.spawn.profiles import apply_profile, load_profile
+    from clawteam.spawn.profiles import apply_profile, load_profile, resolve_profile_name
 
     # Resolve defaults from config
     if backend is None:
         backend, _ = get_effective("default_backend")
         backend = backend or "tmux"
-    if not command and not profile:
-        command = ["claude"]
+    try:
+        profile = resolve_profile_name(profile, command=list(command or []))
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
 
     _team = team or "default"
     _name = agent_name or f"agent-{uuid.uuid4().hex[:6]}"

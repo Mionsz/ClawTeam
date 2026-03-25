@@ -159,6 +159,113 @@ def test_spawn_cli_applies_profile_command_and_env(monkeypatch, tmp_path):
     assert call["env"]["KIMI_API_KEY"] == "moonshot-secret"
 
 
+def test_spawn_cli_uses_configured_default_profile_when_no_profile_or_command(monkeypatch, tmp_path):
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path / ".clawteam"))
+    from clawteam.config import AgentProfile, ClawTeamConfig, save_config
+
+    save_config(
+        ClawTeamConfig(
+            default_profile="gemini-main",
+            profiles={
+                "gemini-main": AgentProfile(
+                    agent="gemini",
+                    model="gemini-2.5-pro",
+                    api_key_env="GEMINI_API_KEY",
+                )
+            },
+        )
+    )
+    TeamManager.create_team(
+        name="demo",
+        leader_name="leader",
+        leader_id="leader001",
+    )
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["spawn", "subprocess", "--team", "demo", "--agent-name", "alice", "--no-workspace", "--task", "say hi"],
+        env={"HOME": str(tmp_path), "CLAWTEAM_DATA_DIR": str(tmp_path / ".clawteam"), "GEMINI_API_KEY": "gemini-secret"},
+    )
+
+    assert result.exit_code == 0
+    call = backend.calls[0]
+    assert call["command"] == ["gemini", "--model", "gemini-2.5-pro"]
+    assert call["env"]["GEMINI_API_KEY"] == "gemini-secret"
+
+
+def test_spawn_cli_uses_single_profile_implicitly(monkeypatch, tmp_path):
+    monkeypatch.setenv("MOONSHOT_API_KEY", "moonshot-secret")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path / ".clawteam"))
+    from clawteam.config import AgentProfile, ClawTeamConfig, save_config
+
+    save_config(
+        ClawTeamConfig(
+            profiles={
+                "moonshot-kimi": AgentProfile(
+                    agent="kimi",
+                    model="kimi-k2-thinking-turbo",
+                    api_key_env="MOONSHOT_API_KEY",
+                )
+            }
+        )
+    )
+    TeamManager.create_team(
+        name="demo",
+        leader_name="leader",
+        leader_id="leader001",
+    )
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["spawn", "subprocess", "--team", "demo", "--agent-name", "alice", "--no-workspace", "--task", "say hi"],
+        env={"HOME": str(tmp_path), "CLAWTEAM_DATA_DIR": str(tmp_path / ".clawteam"), "MOONSHOT_API_KEY": "moonshot-secret"},
+    )
+
+    assert result.exit_code == 0
+    call = backend.calls[0]
+    assert call["command"] == ["kimi", "--model", "kimi-k2-thinking-turbo"]
+    assert call["env"]["KIMI_API_KEY"] == "moonshot-secret"
+
+
+def test_spawn_cli_errors_when_multiple_profiles_exist_without_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path / ".clawteam"))
+    from clawteam.config import AgentProfile, ClawTeamConfig, save_config
+
+    save_config(
+        ClawTeamConfig(
+            profiles={
+                "profile-a": AgentProfile(agent="claude"),
+                "profile-b": AgentProfile(agent="gemini"),
+            }
+        )
+    )
+    TeamManager.create_team(
+        name="demo",
+        leader_name="leader",
+        leader_id="leader001",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["spawn", "subprocess", "--team", "demo", "--agent-name", "alice", "--no-workspace"],
+        env={"HOME": str(tmp_path), "CLAWTEAM_DATA_DIR": str(tmp_path / ".clawteam")},
+    )
+
+    assert result.exit_code == 1
+    assert "Multiple profiles are configured" in result.output
+
+
 def test_launch_cli_applies_profile_to_template_agents(monkeypatch, tmp_path):
     monkeypatch.setenv("MOONSHOT_API_KEY", "moonshot-secret")
     monkeypatch.setenv("HOME", str(tmp_path))

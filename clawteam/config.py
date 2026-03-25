@@ -39,6 +39,7 @@ class ClawTeamConfig(BaseModel):
     data_dir: str = ""
     user: str = ""
     default_team: str = ""
+    default_profile: str = ""
     transport: str = ""
     workspace: str = "auto"  # "auto" | "always" | "never" | ""
     default_backend: str = "tmux"  # "tmux" | "subprocess"
@@ -88,6 +89,7 @@ def get_effective(key: str) -> tuple[str, str]:
         "data_dir": "CLAWTEAM_DATA_DIR",
         "user": "CLAWTEAM_USER",
         "default_team": "CLAWTEAM_TEAM_NAME",
+        "default_profile": "CLAWTEAM_DEFAULT_PROFILE",
         "transport": "CLAWTEAM_TRANSPORT",
         "workspace": "CLAWTEAM_WORKSPACE",
         "default_backend": "CLAWTEAM_DEFAULT_BACKEND",
