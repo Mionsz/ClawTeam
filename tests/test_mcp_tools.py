@@ -7,10 +7,21 @@ import pytest
 from clawteam.mcp.helpers import to_payload
 from clawteam.mcp.tools.board import board_overview, board_team
 from clawteam.mcp.tools.cost import cost_summary
-from clawteam.mcp.tools.mailbox import mailbox_peek, mailbox_peek_count, mailbox_receive, mailbox_send
+from clawteam.mcp.tools.mailbox import (
+    mailbox_peek,
+    mailbox_peek_count,
+    mailbox_receive,
+    mailbox_send,
+)
 from clawteam.mcp.tools.plan import plan_approve, plan_get, plan_reject, plan_submit
 from clawteam.mcp.tools.task import task_create, task_get, task_list, task_stats, task_update
-from clawteam.mcp.tools.team import team_create, team_get, team_list, team_member_add, team_members_list
+from clawteam.mcp.tools.team import (
+    team_create,
+    team_get,
+    team_list,
+    team_member_add,
+    team_members_list,
+)
 from clawteam.mcp.tools.workspace import workspace_cross_branch_log
 from clawteam.team.manager import TeamManager
 
