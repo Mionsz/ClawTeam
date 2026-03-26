@@ -93,13 +93,20 @@ class SubprocessBackend(SpawnBackend):
                 final_command.extend(["-p", prompt])
 
         # Wrap with on-exit hook so task status updates immediately on exit
-        cmd_str = " ".join(shlex.quote(c) for c in final_command)
-        exit_cmd = shlex.quote(clawteam_bin) if os.path.isabs(clawteam_bin) else "clawteam"
-        exit_hook = (
-            f"{exit_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
-            f"--agent {shlex.quote(agent_name)}"
-        )
-        shell_cmd = f"{cmd_str}; {exit_hook}"
+        import sys
+        if sys.platform == "win32":
+            cmd_str = subprocess.list2cmdline(final_command)
+            exit_cmd = subprocess.list2cmdline([clawteam_bin]) if os.path.isabs(clawteam_bin) else "clawteam"
+            exit_hook = f"{exit_cmd} lifecycle on-exit --team {subprocess.list2cmdline([team_name])} --agent {subprocess.list2cmdline([agent_name])}"
+            shell_cmd = f"{cmd_str} & {exit_hook}"
+        else:
+            cmd_str = " ".join(shlex.quote(c) for c in final_command)
+            exit_cmd = shlex.quote(clawteam_bin) if os.path.isabs(clawteam_bin) else "clawteam"
+            exit_hook = (
+                f"{exit_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
+                f"--agent {shlex.quote(agent_name)}"
+            )
+            shell_cmd = f"{cmd_str}; {exit_hook}"
 
         process = subprocess.Popen(
             shell_cmd,
