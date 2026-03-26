@@ -145,7 +145,8 @@ class FileTransport(Transport):
         target = inbox / filename
         try:
             tmp.write_bytes(data)
-            tmp.replace(target)
+            import os
+            os.replace(str(tmp), str(target))
         except Exception:
             tmp.unlink(missing_ok=True)
             raise
@@ -158,7 +159,8 @@ class FileTransport(Transport):
             if path.suffix == ".json":
                 consumed = path.with_suffix(".consumed")
                 try:
-                    path.replace(consumed)
+                    import os
+                    os.replace(str(path), str(consumed))
                 except OSError:
                     continue
             try:
@@ -202,7 +204,8 @@ class FileTransport(Transport):
             raw_path = dead_dir / f"{raw_path.stem}-{uuid.uuid4().hex[:8]}{raw_path.suffix}"
 
         if consumed_path is not None and consumed_path.exists():
-            consumed_path.replace(raw_path)
+            import os
+            os.replace(str(consumed_path), str(raw_path))
         else:
             raw_path.write_bytes(data)
 
