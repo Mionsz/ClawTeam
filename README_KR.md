@@ -1,25 +1,15 @@
-<h1 align="center"><img src="assets/icon.png" alt="" width="64" style="vertical-align: middle;">&nbsp; ClawTeam: 에이전트 스웜 인텔리전스</h1>
+# ClawTeam — Korean README (English Fallback)
 
-<p align="center">
-  <strong>AI 에이전트의 진화 🚀: 솔로 🤖 → 스웜 🦞🤖🤖🤖<br>
-  ClawTeam은 AI 에이전트가 무리를 이뤄 함께 생각하고 일하며 더 빠르게 결과를 내도록 돕습니다</strong>
-</p>
+This file is kept for backward compatibility of repository links and structure.
+A standalone Korean translation is no longer maintained.
 
-<p align="center">
-  <a href="#-빠른-시작"><img src="https://img.shields.io/badge/Quick_Start-3_min-blue?style=for-the-badge" alt="Quick Start"></a>
-  <a href="#-활용-사례"><img src="https://img.shields.io/badge/Use_Cases-3_Demos-green?style=for-the-badge" alt="Use Cases"></a>
-  <a href="#-기능"><img src="https://img.shields.io/badge/Features-12+-purple?style=for-the-badge" alt="Features"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License"></a>
-</p>
+The canonical, English documentation is available in:
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/typer-CLI-green" alt="Typer">
-  <img src="https://img.shields.io/badge/agents-Claude_Code_%7C_Codex_%7C_Any_CLI-blueviolet" alt="Agents">
-  <img src="https://img.shields.io/badge/transport-File_%7C_ZeroMQ_P2P-orange" alt="Transport">
-  <a href="https://github.com/HKUDS/.github/blob/main/profile/README.md"><img src="https://img.shields.io/badge/Feishu-Group-E9DBFC?style=flat&logo=feishu&logoColor=white" alt="Feishu"></a>
-  <a href="https://github.com/HKUDS/.github/blob/main/profile/README.md"><img src="https://img.shields.io/badge/WeChat-Group-C5EAB4?style=flat&logo=wechat&logoColor=white" alt="WeChat"></a>
-</p>
+- [README.md](README.md) — main README
+- [ROADMAP.md](ROADMAP.md) — project roadmap
+- [docs/porting-guide.md](docs/porting-guide.md) — porting guide
+- [docs/transport-architecture.md](docs/transport-architecture.md) — transport architecture
+- [docs/managed-rerun.md](docs/managed-rerun.md) — managed rerun guide
 
 **명령 한 줄이면 끝. 완전 자동화.** 에이전트가 스스로 스웜을 만들고, 작업을 나누고, 결과를 내놓습니다.
 
@@ -387,7 +377,7 @@ ClawTeam에는 `skills/clawteam/`에 재사용 가능한 skill이 들어 있습�
 이 skill을 `~/.claude/skills/clawteam`에 설치한 뒤, 이렇게 프롬프트를 주면 됩니다.
 
 ```
-"웹 앱을 만들어줘. 작업은 clawteam으로 여러 에이전트에게 나눠서 진행해."
+"웹 앱을 만들어줘. 작업은 clawteam로 여러 에이전트에게 나눠서 진행해."
 ```
 
 **Codex**
@@ -592,6 +582,9 @@ clawteam config health
 | `workspace` | `CLAWTEAM_WORKSPACE` | `auto` | `auto` / `always` / `never` |
 | `default_backend` | `CLAWTEAM_DEFAULT_BACKEND` | `tmux` | `tmux` 또는 `subprocess` |
 | `skip_permissions` | `CLAWTEAM_SKIP_PERMISSIONS` | `true` | 에이전트 도구 자동 승인 |
+
+레거시 별칭:
+호환성을 위해 `OH_*` 환경 변수도 계속 인식하지만, 새 문서와 예시는 `CLAWTEAM_*`를 사용합니다.
 
 </details>
 

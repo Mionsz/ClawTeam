@@ -98,9 +98,10 @@ def test_spawn_cli_invalid_backend_hint_mentions_team_flag(monkeypatch, tmp_path
     )
 
     assert result.exit_code == 1
-    assert "the first" in result.output
-    assert "positional argument to `clawteam spawn` is the backend" in result.output
-    assert "--team <name>" in result.output
+    normalized = " ".join(result.output.split())
+    assert "the first" in normalized
+    assert "positional argument to `clawteam spawn` is the backend" in normalized
+    assert "--team <name>" in normalized
 
 
 def test_launch_cli_rejects_removed_acpx_backend(monkeypatch, tmp_path):
@@ -116,6 +117,106 @@ def test_launch_cli_rejects_removed_acpx_backend(monkeypatch, tmp_path):
 
     assert result.exit_code == 1
     assert "Unknown spawn backend: acpx. Available: subprocess, tmux" in result.output
+
+
+def test_team_start_spawns_all_existing_members(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    TeamManager.create_team(name="existing", leader_name="leader", leader_id="l001")
+    TeamManager.add_member("existing", "worker-1", "w001", agent_type="coder")
+    TeamManager.add_member("existing", "worker-2", "w002", agent_type="reviewer")
+
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["team", "start", "existing", "--no-workspace"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 0, result.output
+    spawned_names = {call["agent_name"] for call in backend.calls}
+    assert spawned_names == {"leader", "worker-1", "worker-2"}
+
+
+def test_team_start_errors_on_unknown_team(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["team", "start", "ghost"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 1
+    assert "ghost" in result.output
+
+
+def test_team_start_spawns_runtime_watcher_for_leader(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    TeamManager.create_team(name="x", leader_name="boss", leader_id="b001")
+    TeamManager.add_member("x", "drone", "d001", agent_type="worker")
+
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+
+    popen_calls = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            popen_calls.append(list(args))
+
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "Popen", FakePopen)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["team", "start", "x", "--no-workspace"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 0, result.output
+    watcher_call = next(
+        (c for c in popen_calls if "runtime" in c and "watch" in c),
+        None,
+    )
+    assert watcher_call is not None, f"no runtime watch invocation, got: {popen_calls}"
+    assert "boss" in watcher_call
+    assert "x" in watcher_call
+
+
+def test_team_start_skips_watcher_when_disabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    TeamManager.create_team(name="x2", leader_name="boss", leader_id="b002")
+
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+
+    popen_calls = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            popen_calls.append(list(args))
+
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "Popen", FakePopen)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["team", "start", "x2", "--no-workspace", "--no-watcher"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not any("runtime" in c and "watch" in c for c in popen_calls)
 
 
 def test_spawn_cli_applies_profile_command_and_env(monkeypatch, tmp_path):
@@ -301,6 +402,30 @@ def test_launch_cli_applies_profile_to_template_agents(monkeypatch, tmp_path):
     assert all(call["env"]["KIMI_API_KEY"] == "moonshot-secret" for call in backend.calls)
 
 
+def test_launch_cli_spawns_full_template_team_with_single_leader(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["launch", "hedge-fund", "--team", "fund1", "--goal", "Analyze AAPL"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 0
+    assert len(backend.calls) == 7
+    assert backend.calls[0]["agent_name"] == "portfolio-manager"
+    assert backend.calls[0]["is_leader"] is True
+    assert all(call["is_leader"] is False for call in backend.calls[1:])
+
+    team = TeamManager.get_team("fund1")
+    assert team is not None
+    assert len(team.members) == 7
+
+
 def test_spawn_cli_auto_creates_team_for_orchestrator(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
     backend = RecordingBackend()
@@ -440,6 +565,56 @@ def test_spawn_cli_replace_stops_running_agent_before_respawn(monkeypatch, tmp_p
     assert result.exit_code == 0
     assert stop_calls == [("demo", "alice")]
     assert backend.calls
+
+
+def test_spawn_cli_enables_keepalive_by_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    TeamManager.create_team(
+        name="demo",
+        leader_name="leader",
+        leader_id="leader001",
+    )
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+    monkeypatch.setattr("clawteam.spawn.registry.is_agent_alive", lambda team, agent: None)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["spawn", "tmux", "codex", "--team", "demo", "--agent-name", "alice", "--no-workspace"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 0
+    assert backend.calls[0]["keepalive"] is True
+
+
+def test_spawn_cli_marks_only_actual_team_leader_as_leader(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    TeamManager.create_team(
+        name="demo",
+        leader_name="leader",
+        leader_id="leader001",
+    )
+    backend = RecordingBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+
+    runner = CliRunner()
+    leader_result = runner.invoke(
+        app,
+        ["spawn", "tmux", "claude", "--team", "demo", "--agent-name", "leader", "--agent-type", "leader", "--no-workspace"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+    worker_result = runner.invoke(
+        app,
+        ["spawn", "tmux", "claude", "--team", "demo", "--agent-name", "worker", "--agent-type", "leader", "--no-workspace"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert leader_result.exit_code == 0
+    assert worker_result.exit_code == 0
+    assert backend.calls[0]["is_leader"] is True
+    assert backend.calls[1]["is_leader"] is False
 
 
 def test_spawn_cli_passes_repo_as_cwd_without_worktree_and_uses_repo_prompt(monkeypatch, tmp_path):

@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from clawteam.spawn.command_validation import normalize_spawn_command
+from clawteam.spawn.cli_env import build_docker_clawteam_runtime
+from clawteam.spawn.command_validation import (
+    command_has_workspace_arg as has_workspace_arg,
+)
+from clawteam.spawn.command_validation import (
+    docker_wrapped_cli_name,
+    ensure_docker_env,
+    ensure_docker_mount,
+    ensure_docker_workspace,
+    normalize_spawn_command,
+)
 
 
 @dataclass(frozen=True)
@@ -29,16 +40,23 @@ class NativeCliAdapter:
         skip_permissions: bool = False,
         interactive: bool = False,
         agent_name: str | None = None,
+        container_env: dict[str, str] | None = None,
     ) -> PreparedCommand:
         normalized_command = normalize_spawn_command(command)
         final_command = list(normalized_command)
         post_launch_prompt = None
 
         if skip_permissions:
-            if is_claude_command(normalized_command):
-                final_command.extend(["--permission-mode", "dontAsk"])
+            # Claude Code rejects --dangerously-skip-permissions when running
+            # as root/sudo.  Detect this and silently omit the flag so spawned
+            # agents can still start.
+            _is_root = os.getuid() == 0
+            if is_claude_command(normalized_command) and not _is_root:
+                final_command.append("--dangerously-skip-permissions")
             elif is_codex_command(normalized_command):
-                final_command.append("--dangerously-bypass-approvals-and-sandbox")
+                # codex-auto already includes auto-approve flags
+                if command_basename(normalized_command) != "codex-auto":
+                    final_command.append("--dangerously-auto-approve-everything")
             elif (
                 is_gemini_command(normalized_command)
                 or is_kimi_command(normalized_command)
@@ -48,12 +66,40 @@ class NativeCliAdapter:
                 final_command.append("--yolo")
 
         if is_kimi_command(normalized_command):
-            if cwd and not command_has_workspace_arg(normalized_command):
+            if cwd and not has_workspace_arg(normalized_command):
                 final_command.extend(["-w", cwd])
             if prompt:
                 final_command.extend(["--print", "-p", prompt])
         elif is_nanobot_command(normalized_command):
-            if cwd and not command_has_workspace_arg(normalized_command):
+            if docker_wrapped_cli_name(normalized_command) == "nanobot":
+                if cwd:
+                    final_command = ensure_docker_workspace(final_command, cwd)
+                if container_env:
+                    data_dir = container_env.get("CLAWTEAM_DATA_DIR")
+                    if data_dir:
+                        final_command = ensure_docker_mount(final_command, data_dir)
+                    docker_runtime = build_docker_clawteam_runtime()
+                    if docker_runtime:
+                        for host_path, container_path in docker_runtime.mounts:
+                            final_command = ensure_docker_mount(final_command, host_path, container_path)
+                    docker_env = {
+                        key: value
+                        for key, value in container_env.items()
+                        if value
+                        and (
+                            (key.startswith("CLAWTEAM_") and key != "CLAWTEAM_BIN")
+                            or key.startswith("OH_")
+                            or key.endswith("_API_KEY")
+                            or key.endswith("_BASE_URL")
+                            or key.endswith("_API_BASE")
+                            or key == "GOOGLE_CLOUD_PROJECT"
+                        )
+                    }
+                    if docker_runtime:
+                        docker_env.update(docker_runtime.env)
+                    if docker_env:
+                        final_command = ensure_docker_env(final_command, docker_env)
+            if cwd and not has_workspace_arg(normalized_command):
                 final_command.extend(["-w", cwd])
             if prompt:
                 final_command.extend(["-m", prompt])
@@ -76,6 +122,21 @@ class NativeCliAdapter:
             if prompt:
                 if interactive:
                     final_command.append(prompt)
+                else:
+                    final_command.extend(["-p", prompt])
+        elif is_hermes_command(normalized_command):
+            # hermes uses --yolo for auto-approve and -z for one-shot prompt
+            # Always add --yolo and --accept-hooks to prevent interactive stalls
+            if "--yolo" not in final_command:
+                final_command.append("--yolo")
+            if "--accept-hooks" not in final_command:
+                final_command.append("--accept-hooks")
+            if prompt:
+                final_command.extend(["-z", prompt])
+        elif is_gemini_command(normalized_command):
+            if prompt:
+                if interactive:
+                    final_command.extend(["-i", prompt])
                 else:
                     final_command.extend(["-p", prompt])
         elif prompt:
@@ -110,7 +171,7 @@ def is_claude_command(command: list[str]) -> bool:
 
 def is_codex_command(command: list[str]) -> bool:
     """Check if the command is a Codex CLI invocation."""
-    return command_basename(command) in ("codex", "codex-cli")
+    return command_basename(command) in ("codex", "codex-cli", "codex-auto")
 
 
 def _is_codex_noninteractive_command(command: list[str]) -> bool:
@@ -139,7 +200,7 @@ def _is_codex_noninteractive_command(command: list[str]) -> bool:
 
 def is_nanobot_command(command: list[str]) -> bool:
     """Check if the command is a nanobot CLI invocation."""
-    return command_basename(command) == "nanobot"
+    return command_basename(command) == "nanobot" or docker_wrapped_cli_name(command) == "nanobot"
 
 
 def is_gemini_command(command: list[str]) -> bool:
@@ -172,6 +233,11 @@ def is_pi_command(command: list[str]) -> bool:
     return command_basename(command) == "pi"
 
 
+def is_hermes_command(command: list[str]) -> bool:
+    """Check if the command is a Hermes Agent CLI invocation."""
+    return command_basename(command) == "hermes"
+
+
 def is_interactive_cli(command: list[str]) -> bool:
     """Check if the command is a known interactive AI coding CLI."""
     return (
@@ -184,9 +250,5 @@ def is_interactive_cli(command: list[str]) -> bool:
         or is_opencode_command(command)
         or is_openclaw_command(command)
         or is_pi_command(command)
+        or is_hermes_command(command)
     )
-
-
-def command_has_workspace_arg(command: list[str]) -> bool:
-    """Return True when a command already specifies a workspace."""
-    return "-w" in command or "--workspace" in command

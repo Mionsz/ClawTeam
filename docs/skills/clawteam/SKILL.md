@@ -1,10 +1,10 @@
 ---
-name: ClawTeam Multi-Agent Coordination
+name: clawteam
 description: >
   This skill should be used when the user asks to "create a team", "spawn agents",
   "assign tasks", "coordinate multiple agents", "check team status", "view kanban board",
   "send messages between agents", "manage team tasks", "monitor team progress",
-  or mentions "clawteam", "multi-agent coordination", "team collaboration",
+  or mentions "clawteam", legacy "oh", "multi-agent coordination", "team collaboration",
   "agent inbox", "task board", "spawn worker". This skill should also be triggered
   when the current task is complex enough to benefit from splitting into subtasks
   and delegating to multiple agents — for example when the user asks to "build a
@@ -13,7 +13,6 @@ description: >
   single agent can efficiently handle alone. Provides comprehensive guidance for
   using the ClawTeam CLI to orchestrate multi-agent teams with task management,
   messaging, monitoring, runtime profiles, git context, and recovery tooling.
-version: 0.3.1
 ---
 
 # ClawTeam Multi-Agent Coordination
@@ -26,11 +25,19 @@ All operations are performed via the `clawteam` CLI. Data is stored in `~/.clawt
 
 ## Installation
 
+Check whether `clawteam` is already available:
+
+```bash
+clawteam --version
+```
+
+If the command is missing, install it and continue:
+
 ```bash
 pip install clawteam
 ```
 
-Requires Python 3.10+. For P2P transport support: `pip install clawteam[p2p]`.
+Requires Python 3.10+. For P2P transport support: `pip install "clawteam[p2p]"`.
 
 ## Prerequisites
 

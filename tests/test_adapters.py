@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from clawteam.spawn.adapters import (
     NativeCliAdapter,
     command_basename,
     is_interactive_cli,
+    is_nanobot_command,
     is_opencode_command,
     is_pi_command,
     is_qwen_command,
 )
+from clawteam.spawn.cli_env import DockerClawteamRuntime
 
 
 class TestCLIDetection:
@@ -37,6 +41,9 @@ class TestCLIDetection:
     def test_is_interactive_cli_covers_all_known(self):
         for cmd in ["claude", "codex", "nanobot", "gemini", "kimi", "qwen", "opencode", "pi"]:
             assert is_interactive_cli([cmd]), f"{cmd} should be interactive"
+
+    def test_is_nanobot_command_accepts_docker_wrapper(self):
+        assert is_nanobot_command(["docker", "run", "--rm", "hkuds/nanobot"])
 
     def test_is_interactive_cli_rejects_unknown(self):
         assert not is_interactive_cli(["my-custom-agent"])
@@ -119,6 +126,72 @@ class TestPrepareCommandPrompt:
         )
         assert result.post_launch_prompt is None
         assert "hello" in result.final_command
+
+    def test_gemini_interactive_uses_prompt_interactive_flag(self):
+        result = self.adapter.prepare_command(
+            ["gemini"], prompt="hello", interactive=True,
+        )
+        assert result.post_launch_prompt is None
+        assert result.final_command == ["gemini", "-i", "hello"]
+
+    def test_docker_wrapped_nanobot_gets_agent_workspace_and_prompt(self):
+        with patch(
+            "clawteam.spawn.adapters.build_docker_clawteam_runtime",
+            return_value=DockerClawteamRuntime(
+                mounts=(
+                    ("/tmp/docker-bootstrap", "/usr/local/bin/clawteam"),
+                    ("/tmp/docker-clawteam", "/usr/local/bin/clawteam-host"),
+                    ("/tmp/docker-venv", "/tmp/docker-venv"),
+                    ("/tmp/docker-src", "/tmp/docker-src"),
+                ),
+                env={
+                    "CLAWTEAM_BIN": "/usr/local/bin/clawteam",
+                    "CLAWTEAM_DOCKER_HOST_WRAPPER": "/usr/local/bin/clawteam-host",
+                    "CLAWTEAM_DOCKER_SOURCE_ROOT": "/tmp/docker-src",
+                },
+            ),
+        ):
+            result = self.adapter.prepare_command(
+                ["docker", "run", "--rm", "hkuds/nanobot"],
+                prompt="hello",
+                cwd="/tmp/demo",
+                container_env={
+                    "CLAWTEAM_DATA_DIR": "/tmp/.clawteam",
+                    "CLAWTEAM_TEAM_NAME": "demo",
+                    "CLAWTEAM_AGENT_NAME": "worker1",
+                    "OPENAI_API_KEY": "secret-key",
+                    "CLAWTEAM_BIN": "/tmp/venv/bin/clawteam",
+                },
+            )
+        assert result.final_command[:5] == [
+            "docker",
+            "run",
+            "--rm",
+            "-w",
+            "/tmp/demo",
+        ]
+        assert "/tmp/demo:/tmp/demo" in result.final_command
+        assert "/tmp/.clawteam:/tmp/.clawteam" in result.final_command
+        assert "/tmp/docker-bootstrap:/usr/local/bin/clawteam" in result.final_command
+        assert "/tmp/docker-clawteam:/usr/local/bin/clawteam-host" in result.final_command
+        assert "/tmp/docker-venv:/tmp/docker-venv" in result.final_command
+        assert "/tmp/docker-src:/tmp/docker-src" in result.final_command
+        assert "CLAWTEAM_DATA_DIR=/tmp/.clawteam" in result.final_command
+        assert "CLAWTEAM_TEAM_NAME=demo" in result.final_command
+        assert "CLAWTEAM_AGENT_NAME=worker1" in result.final_command
+        assert "CLAWTEAM_BIN=/usr/local/bin/clawteam" in result.final_command
+        assert "CLAWTEAM_DOCKER_HOST_WRAPPER=/usr/local/bin/clawteam-host" in result.final_command
+        assert "CLAWTEAM_DOCKER_SOURCE_ROOT=/tmp/docker-src" in result.final_command
+        assert "OPENAI_API_KEY=secret-key" in result.final_command
+        assert result.final_command[-7:] == [
+            "hkuds/nanobot",
+            "nanobot",
+            "agent",
+            "-w",
+            "/tmp/demo",
+            "-m",
+            "hello",
+        ]
 
 
 class TestPiCommand:

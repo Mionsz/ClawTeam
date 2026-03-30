@@ -51,6 +51,11 @@ class TeamManager:
     """Manages team lifecycle operations."""
 
     @staticmethod
+    def team_exists(team_name: str) -> bool:
+        """Return True when a team config exists."""
+        return _load_config(team_name) is not None
+
+    @staticmethod
     def get_member(
         team_name: str,
         member_name: str,
@@ -135,7 +140,7 @@ class TeamManager:
     def add_member(
         team_name: str,
         member_name: str,
-        agent_id: str,
+        agent_id: str | None = None,
         agent_type: str = "general-purpose",
         user: str = "",
     ) -> TeamMember:
@@ -148,12 +153,10 @@ class TeamManager:
         for m in config.members:
             if m.name == member_name and m.user == user:
                 raise ValueError(f"Agent '{member_name}' (user={user or '(none)'}) already in team")
-        member = TeamMember(
-            name=member_name,
-            user=user,
-            agent_id=agent_id,
-            agent_type=agent_type,
-        )
+        member_kwargs = {"name": member_name, "user": user, "agent_type": agent_type}
+        if agent_id is not None:
+            member_kwargs["agent_id"] = agent_id
+        member = TeamMember(**member_kwargs)
         config.members.append(member)
         _save_config(config)
         inbox_name = TeamManager.inbox_name_for(member)

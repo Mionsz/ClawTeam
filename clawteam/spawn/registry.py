@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -27,8 +28,10 @@ def register_agent(
     agent_name: str,
     backend: str,
     tmux_target: str = "",
+    block_id: str = "",
     pid: int = 0,
     command: list[str] | None = None,
+    log_path: str = "",
 ) -> None:
     """Record spawn info for an agent (atomic + locked write)."""
     path = _registry_path(team_name)
@@ -37,8 +40,10 @@ def register_agent(
         registry[agent_name] = {
             "backend": backend,
             "tmux_target": tmux_target,
+            "block_id": block_id,
             "pid": pid,
             "command": command or [],
+            "log_path": log_path,
             "spawned_at": time.time(),
         }
         _save(path, registry)
@@ -70,6 +75,8 @@ def is_agent_alive(team_name: str, agent_name: str) -> bool | None:
         return alive
     elif backend == "subprocess":
         return _pid_alive(info.get("pid", 0))
+    elif backend == "wsh":
+        return _wsh_block_alive(info.get("block_id", ""))
     return None
 
 
@@ -143,6 +150,14 @@ def stop_agent(team_name: str, agent_name: str, timeout_seconds: float = 3.0) ->
                 pass
             except PermissionError:
                 return False
+    elif backend == "wsh":
+        block_id = info.get("block_id", "")
+        if block_id:
+            subprocess.run(
+                ["wsh", "deleteblock", "-b", block_id],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
@@ -202,6 +217,43 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         # Process exists but we can't signal it
         return True
+
+
+def _wsh_block_alive(block_id: str) -> bool:
+    """Check if a wsh block is still alive."""
+    if not block_id:
+        return False
+
+    wsh_bin = shutil.which("wsh")
+    if not wsh_bin:
+        for p in [
+            Path.home() / ".local/share/tideterm/bin/wsh",
+            Path.home() / ".local/state/waveterm/bin/wsh",
+        ]:
+            if p.is_file() and os.access(p, os.X_OK):
+                wsh_bin = str(p)
+                break
+    if not wsh_bin:
+        return False
+
+    result = subprocess.run(
+        [wsh_bin, "blocks", "list", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+    )
+    if result.returncode != 0:
+        return False
+
+    try:
+        blocks = json.loads(result.stdout)
+        for block in blocks:
+            if block.get("blockid") == block_id:
+                return True
+    except json.JSONDecodeError:
+        pass
+
+    return False
 
 
 def _load(path: Path) -> dict:

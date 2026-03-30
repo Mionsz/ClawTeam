@@ -37,6 +37,16 @@ class AgentPreset(BaseModel):
     client_overrides: dict[str, AgentProfile] = Field(default_factory=dict)
 
 
+class HookDef(BaseModel):
+    """A user-configurable event hook (stored in config)."""
+
+    event: str = ""
+    action: str = "shell"  # "shell" | "python"
+    command: str = ""
+    priority: int = 0
+    enabled: bool = True
+
+
 class ClawTeamConfig(BaseModel):
     data_dir: str = ""
     user: str = ""
@@ -55,6 +65,12 @@ class ClawTeamConfig(BaseModel):
     presets: dict[str, AgentPreset] = Field(default_factory=dict)
     spawn_prompt_delay: float = 2.0  # fallback wait (seconds) if TUI ready-detection times out
     spawn_ready_timeout: float = 30.0  # max seconds to poll for TUI readiness before fallback
+    hooks: list[HookDef] = Field(default_factory=list)
+    plugins: list[str] = Field(default_factory=list)
+
+
+# Alias for code that uses the harness naming
+HarnessConfig = ClawTeamConfig
 
 
 def config_path() -> Path:
