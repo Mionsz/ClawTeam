@@ -1,25 +1,15 @@
-<h1 align="center"><img src="assets/icon.png" alt="" width="64" style="vertical-align: middle;">&nbsp; ClawTeam: 에이전트 스웜 인텔리전스</h1>
+# ClawTeam — Korean README (English Fallback)
 
-<p align="center">
-  <strong>AI 에이전트의 진화 🚀: 솔로 🤖 → 스웜 🦞🤖🤖🤖<br>
-  ClawTeam은 AI 에이전트가 무리를 이뤄 함께 생각하고 일하며 더 빠르게 결과를 내도록 돕습니다</strong>
-</p>
+This file is kept for backward compatibility of repository links and structure.
+A standalone Korean translation is no longer maintained.
 
-<p align="center">
-  <a href="#-빠른-시작"><img src="https://img.shields.io/badge/Quick_Start-3_min-blue?style=for-the-badge" alt="Quick Start"></a>
-  <a href="#-활용-사례"><img src="https://img.shields.io/badge/Use_Cases-3_Demos-green?style=for-the-badge" alt="Use Cases"></a>
-  <a href="#-기능"><img src="https://img.shields.io/badge/Features-12+-purple?style=for-the-badge" alt="Features"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License"></a>
-</p>
+The canonical, English documentation is available in:
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/typer-CLI-green" alt="Typer">
-  <img src="https://img.shields.io/badge/agents-Claude_Code_%7C_Codex_%7C_Any_CLI-blueviolet" alt="Agents">
-  <img src="https://img.shields.io/badge/transport-File_%7C_ZeroMQ_P2P-orange" alt="Transport">
-  <a href="https://github.com/HKUDS/.github/blob/main/profile/README.md"><img src="https://img.shields.io/badge/Feishu-Group-E9DBFC?style=flat&logo=feishu&logoColor=white" alt="Feishu"></a>
-  <a href="https://github.com/HKUDS/.github/blob/main/profile/README.md"><img src="https://img.shields.io/badge/WeChat-Group-C5EAB4?style=flat&logo=wechat&logoColor=white" alt="WeChat"></a>
-</p>
+- [README.md](README.md) — main README
+- [ROADMAP.md](ROADMAP.md) — project roadmap
+- [docs/porting-guide.md](docs/porting-guide.md) — porting guide
+- [docs/transport-architecture.md](docs/transport-architecture.md) — transport architecture
+- [docs/managed-rerun.md](docs/managed-rerun.md) — managed rerun guide
 
 **명령 한 줄이면 끝. 완전 자동화.** 에이전트가 스스로 스웜을 만들고, 작업을 나누고, 결과를 내놓습니다.
 
@@ -187,11 +177,11 @@ ClawTeam은 **에이전트 스웜 인텔리전스**를 구현합니다. AI 에�
 <td width="33%">
 
 ### 🦞 에이전트가 에이전트를 만듭니다
-리더 에이전트는 `oh spawn`을 호출해 워커를 생성합니다. 각 워커는 자동으로 자신만의 **git worktree**, **tmux 창**, **정체성**을 부여받습니다.
+리더 에이전트는 `clawteam spawn`을 호출해 워커를 생성합니다. 각 워커는 자동으로 자신만의 **git worktree**, **tmux 창**, **정체성**을 부여받습니다.
 
 ```bash
 # 리더 에이전트가 실행:
-oh spawn --team my-team \
+clawteam spawn --team my-team \
   --agent-name worker1 \
   --task "인증 모듈 구현"
 ```
@@ -204,9 +194,9 @@ oh spawn --team my-team \
 
 ```bash
 # 워커 에이전트가 작업 확인:
-oh task list my-team --owner me
+clawteam task list my-team --owner me
 # 그다음 결과 보고:
-oh inbox send my-team leader \
+clawteam inbox send my-team leader \
   "인증 작업 완료. 테스트도 모두 통과했습니다."
 ```
 
@@ -218,9 +208,9 @@ oh inbox send my-team leader \
 
 ```bash
 # 모든 에이전트를 한 번에 보기
-oh board attach my-team
+clawteam board attach my-team
 # 또는 웹 대시보드 실행
-oh board serve --port 8080
+clawteam board serve --port 8080
 ```
 
 </td>
@@ -271,16 +261,16 @@ oh board serve --port 8080
 
 🦞 리더 에이전트의 행동:
 ├── 📖 program.md를 읽고 실험 프로토콜 파악
-├── 🏗️ oh team spawn-team autoresearch
+├── 🏗️ clawteam team spawn-team autoresearch
 ├── 🚀 각 GPU에 연구 방향 할당:
-│   ├── GPU 0: oh spawn --task "모델 깊이 탐색 (DEPTH 10-16)"
-│   ├── GPU 1: oh spawn --task "모델 폭 탐색 (ASPECT_RATIO 80-128)"
-│   ├── GPU 2: oh spawn --task "학습률과 옵티마이저 튜닝"
-│   ├── GPU 3: oh spawn --task "배치 크기와 accumulation 탐색"
-│   ├── GPU 4-7: oh spawn tmux codex --task "..."  (Codex 에이전트)
+│   ├── GPU 0: clawteam spawn --task "모델 깊이 탐색 (DEPTH 10-16)"
+│   ├── GPU 1: clawteam spawn --task "모델 폭 탐색 (ASPECT_RATIO 80-128)"
+│   ├── GPU 2: clawteam spawn --task "학습률과 옵티마이저 튜닝"
+│   ├── GPU 3: clawteam spawn --task "배치 크기와 accumulation 탐색"
+│   ├── GPU 4-7: clawteam spawn tmux codex --task "..."  (Codex 에이전트)
 │   └── 🌳 각 에이전트: 자체 git worktree, 자체 브랜치, 격리된 실험
 ├── 🔄 30분마다 결과 점검:
-│   ├── oh board show autoresearch
+│   ├── clawteam board show autoresearch
 │   ├── 각 에이전트의 results.tsv 확인
 │   ├── 🏆 최고 성과 식별 (depth=12, batch=2^17, norm-before-RoPE)
 │   └── 📡 성과 공유: 새 에이전트가 최고 설정에서 시작하도록 지시
@@ -303,7 +293,7 @@ Claude Code에게 이렇게 말합니다. *"인증, 데이터베이스, React �
 사람 프롬프트: "auth, database, React frontend가 있는 full-stack todo app을 만들어줘."
 
 🦞 리더 에이전트의 행동:
-├── 🏗️ oh team spawn-team webapp -d "풀스택 할 일 앱"
+├── 🏗️ clawteam team spawn-team webapp -d "풀스택 할 일 앱"
 ├── 📋 의존성 체인이 있는 작업 생성:
 │   ├── T1: "REST API 스키마 설계"                → architect
 │   ├── T2: "JWT 인증 구현" --blocked-by T1       → backend1
@@ -311,15 +301,15 @@ Claude Code에게 이렇게 말합니다. *"인증, 데이터베이스, React �
 │   ├── T4: "React 프런트엔드 구축"               → frontend
 │   └── T5: "통합 테스트" --blocked-by T2,T3,T4   → tester
 ├── 🚀 5개 서브에이전트 생성 (각자 독립 git worktree 사용):
-│   ├── oh spawn --agent-name architect --task "API 스키마 설계"
-│   ├── oh spawn --agent-name backend1  --task "JWT 인증 구현"
-│   ├── oh spawn --agent-name backend2  --task "PostgreSQL 모델 작성"
-│   ├── oh spawn --agent-name frontend  --task "React UI 구현"
-│   └── oh spawn --agent-name tester    --task "pytest 테스트 작성"
+│   ├── clawteam spawn --agent-name architect --task "API 스키마 설계"
+│   ├── clawteam spawn --agent-name backend1  --task "JWT 인증 구현"
+│   ├── clawteam spawn --agent-name backend2  --task "PostgreSQL 모델 작성"
+│   ├── clawteam spawn --agent-name frontend  --task "React UI 구현"
+│   └── clawteam spawn --agent-name tester    --task "pytest 테스트 작성"
 ├── 🔗 의존성 자동 해제:
 │   ├── architect 완료 → backend1, backend2 자동 시작 가능
 │   ├── 백엔드 작업 완료 → tester 자동 시작 가능
-│   └── 각 에이전트 호출: oh task update <id> --status completed
+│   └── 각 에이전트 호출: clawteam task update <id> --status completed
 ├── 💬 받은 편지함으로 서브에이전트 간 조율:
 │   ├── architect → backend1: "OpenAPI 스펙은 다음과 같아: ..."
 │   ├── backend1 → tester: "인증 엔드포인트는 /api/auth/* 에 준비됨"
@@ -335,7 +325,7 @@ Claude Code에게 이렇게 말합니다. *"인증, 데이터베이스, React �
 
 ```bash
 # 이 한 줄로 전체 팀이 실행됩니다:
-oh launch hedge-fund --team fund1 --goal "AAPL, MSFT, NVDA를 2026년 2분기 기준으로 분석"
+clawteam launch hedge-fund --team fund1 --goal "AAPL, MSFT, NVDA를 2026년 2분기 기준으로 분석"
 ```
 
 ```
@@ -348,9 +338,9 @@ oh launch hedge-fund --team fund1 --goal "AAPL, MSFT, NVDA를 2026년 2분기 �
 │   ├── 📋 펀더멘털 분석가     → 재무 비율 (P/E, D/E, FCF)
 │   └── 📰 센티먼트 분석가     → 뉴스 + 내부자 거래 신호
 ├── 🛡️ 리스크 매니저 생성, 모든 애널리스트 신호 대기:
-│   ├── oh inbox receive fund1 (5개 신호 수집)
+│   ├── clawteam inbox receive fund1 (5개 신호 수집)
 │   ├── 종합 분석 후 포지션 한도 계산
-│   └── oh inbox send fund1 portfolio-manager "RISK REPORT: ..."
+│   └── clawteam inbox send fund1 portfolio-manager "RISK REPORT: ..."
 └── 💼 포트폴리오 매니저가 최종 매수/매도/보유 결정
 ```
 
@@ -398,26 +388,26 @@ ClawTeam에는 `skills/clawteam/`에 재사용 가능한 skill이 들어 있습�
 이 작업을 여러 에이전트 팀으로 나누고 끝까지 조율하도록 $clawteam을 사용해줘.
 ```
 
-그러면 에이전트가 내부적으로 `oh` CLI 명령을 사용해 팀을 만들고, 워커를 띄우고, 작업을 나누고, 전체 흐름을 조율합니다.
+그러면 에이전트가 내부적으로 `clawteam` CLI 명령을 사용해 팀을 만들고, 워커를 띄우고, 작업을 나누고, 전체 흐름을 조율합니다.
 
 ### 🔧 옵션 2: 직접 조작하기
 
 ```bash
 # 1. 팀 생성 (당신이 리더가 됩니다)
-oh team spawn-team my-team -d "인증 모듈 만들기" -n leader
+clawteam team spawn-team my-team -d "인증 모듈 만들기" -n leader
 
 # 2. 워커 에이전트 생성. 각 에이전트는 git worktree, tmux 창, 정체성을 받습니다
-oh spawn --team my-team --agent-name alice --task "OAuth2 플로우 구현"
-oh spawn --team my-team --agent-name bob   --task "인증 유닛 테스트 작성"
+clawteam spawn --team my-team --agent-name alice --task "OAuth2 플로우 구현"
+clawteam spawn --team my-team --agent-name bob   --task "인증 유닛 테스트 작성"
 
 # 3. 워커는 자동으로 조율용 프롬프트를 받아 다음 동작을 배웁니다:
-#    ✅ 작업 확인:    oh task list my-team --owner alice
-#    ✅ 상태 갱신:    oh task update my-team <id> --status completed
-#    ✅ 리더에게 알림: oh inbox send my-team leader "완료!"
-#    ✅ 유휴 상태 보고: oh lifecycle idle my-team
+#    ✅ 작업 확인:    clawteam task list my-team --owner alice
+#    ✅ 상태 갱신:    clawteam task update my-team <id> --status completed
+#    ✅ 리더에게 알림: clawteam inbox send my-team leader "완료!"
+#    ✅ 유휴 상태 보고: clawteam lifecycle idle my-team
 
 # 4. 나란히 일하는 모습을 확인
-oh board attach my-team
+clawteam board attach my-team
 ```
 
 ### 🤖 지원하는 에이전트
@@ -426,12 +416,12 @@ ClawTeam은 셸 명령을 실행할 수 있는 **어떤 CLI 에이전트**와도
 
 | Agent | Spawn Command | Status |
 |-------|--------------|--------|
-| [Claude Code](https://claude.ai/claude-code) | `oh spawn tmux claude --team ...` | ✅ 완전 지원 |
-| [Codex](https://openai.com/codex) | `oh spawn tmux codex --team ...` | ✅ 완전 지원 |
-| [OpenClaw](https://github.com/openclaw/openclaw) | `oh spawn tmux openclaw --team ...` | ✅ 완전 지원 |
-| [nanobot](https://github.com/HKUDS/nanobot) | `oh spawn tmux nanobot --team ...` | ✅ 완전 지원 |
-| [Cursor](https://cursor.com) | `oh spawn subprocess cursor --team ...` | 🔮 실험적 |
-| Custom scripts | `oh spawn subprocess python --team ...` | ✅ 완전 지원 |
+| [Claude Code](https://claude.ai/claude-code) | `clawteam spawn tmux claude --team ...` | ✅ 완전 지원 |
+| [Codex](https://openai.com/codex) | `clawteam spawn tmux codex --team ...` | ✅ 완전 지원 |
+| [OpenClaw](https://github.com/openclaw/openclaw) | `clawteam spawn tmux openclaw --team ...` | ✅ 완전 지원 |
+| [nanobot](https://github.com/HKUDS/nanobot) | `clawteam spawn tmux nanobot --team ...` | ✅ 완전 지원 |
+| [Cursor](https://cursor.com) | `clawteam spawn subprocess cursor --team ...` | 🔮 실험적 |
+| Custom scripts | `clawteam spawn subprocess python --team ...` | ✅ 완전 지원 |
 
 ---
 
@@ -451,7 +441,7 @@ ClawTeam은 셸 명령을 실행할 수 있는 **어떤 CLI 에이전트**와도
 - 각 에이전트는 자신만의 **git worktree**(별도 브랜치)를 가짐
 - 병렬 작업 중에도 merge conflict 최소화
 - 체크포인트, 병합, 정리 명령 제공
-- 브랜치 이름 규칙: `oh/{team}/{agent}`
+- 브랜치 이름 규칙: `clawteam/{team}/{agent}`
 
 ### 📋 의존성 있는 작업 추적
 - 공유 칸반 흐름: `pending` → `in_progress` → `completed` / `blocked`
@@ -476,7 +466,7 @@ ClawTeam은 셸 명령을 실행할 수 있는 **어떤 CLI 에이전트**와도
 
 ### 🎪 팀 템플릿
 - **TOML 파일**로 팀 원형(역할, 작업, 프롬프트) 정의
-- 명령 한 줄로 팀 전체 실행: `oh launch <template>`
+- 명령 한 줄로 팀 전체 실행: `clawteam launch <template>`
 - 기본 포함: AI Hedge Fund (7개 에이전트). 직접 확장 가능
 - 변수 치환: `{goal}`, `{team_name}`, `{agent_name}`
 
@@ -500,18 +490,18 @@ ClawTeam은 셸 명령을 실행할 수 있는 **어떤 CLI 에이전트**와도
 
 ## 🤖 에이전트는 ClawTeam을 어떻게 쓰나
 
-에이전트가 `oh spawn`으로 생성되면 **조율 프롬프트가 자동 주입**됩니다.
+에이전트가 `clawteam spawn`으로 생성되면 **조율 프롬프트가 자동 주입**됩니다.
 
 ```
 ## Coordination Protocol (생성된 모든 에이전트에 자동 주입)
 
-- 📋 작업 확인:          oh task list <team> --owner <your-name>
-- ▶️ 작업 시작:         oh task update <team> <id> --status in_progress
-- ✅ 작업 완료:         oh task update <team> <id> --status completed
-- 💬 리더에게 메시지:    oh inbox send <team> leader "status update..."
-- 💬 팀원에게 메시지:    oh inbox send <team> <name> "info..."
-- 📨 받은 편지함 확인:   oh inbox receive <team>
-- 😴 유휴 상태 보고:    oh lifecycle idle <team>
+- 📋 작업 확인:          clawteam task list <team> --owner <your-name>
+- ▶️ 작업 시작:         clawteam task update <team> <id> --status in_progress
+- ✅ 작업 완료:         clawteam task update <team> <id> --status completed
+- 💬 리더에게 메시지:    clawteam inbox send <team> leader "status update..."
+- 💬 팀원에게 메시지:    clawteam inbox send <team> <name> "info..."
+- 📨 받은 편지함 확인:   clawteam inbox receive <team>
+- 😴 유휴 상태 보고:    clawteam lifecycle idle <team>
 ```
 
 즉 **어떤 CLI 에이전트든** ClawTeam 팀에 참여할 수 있습니다. 셸 명령만 실행할 수 있으면 됩니다. 별도 SDK도, API 통합도, 프레임워크 종속도 필요 없습니다.
@@ -525,32 +515,32 @@ ClawTeam은 셸 명령을 실행할 수 있는 **어떤 CLI 에이전트**와도
 
 ```bash
 # 🏗️ 팀 라이프사이클
-oh team spawn-team <team> -d "description" -n <leader>
-oh team discover                    # 전체 팀 목록
-oh team status <team>               # 멤버 상태 보기
-oh team cleanup <team> --force      # 팀 삭제
+clawteam team spawn-team <team> -d "description" -n <leader>
+clawteam team discover                    # 전체 팀 목록
+clawteam team status <team>               # 멤버 상태 보기
+clawteam team cleanup <team> --force      # 팀 삭제
 
 # 🚀 에이전트 생성
-oh spawn --team <team> --agent-name <name> --task "do this"
-oh spawn tmux codex --team <team> --agent-name <name> --task "do this"
+clawteam spawn --team <team> --agent-name <name> --task "do this"
+clawteam spawn tmux codex --team <team> --agent-name <name> --task "do this"
 
 # 📋 작업 관리
-oh task create <team> "subject" -o <owner> --blocked-by <id1>,<id2>
-oh task update <team> <id> --status completed   # 완료 시 의존성 자동 해제
-oh task list <team> --status blocked --owner worker1
-oh task wait <team> --timeout 300
+clawteam task create <team> "subject" -o <owner> --blocked-by <id1>,<id2>
+clawteam task update <team> <id> --status completed   # 완료 시 의존성 자동 해제
+clawteam task list <team> --status blocked --owner worker1
+clawteam task wait <team> --timeout 300
 
 # 💬 메시징
-oh inbox send <team> <to> "message"
-oh inbox broadcast <team> "message"
-oh inbox receive <team>             # 메시지 소비
-oh inbox peek <team>                # 소비 없이 읽기
+clawteam inbox send <team> <to> "message"
+clawteam inbox broadcast <team> "message"
+clawteam inbox receive <team>             # 메시지 소비
+clawteam inbox peek <team>                # 소비 없이 읽기
 
 # 📊 모니터링
-oh board show <team>                # 터미널 칸반
-oh board live <team> --interval 3   # 자동 새로고침
-oh board attach <team>              # 타일형 tmux 뷰
-oh board serve --port 8080          # Web UI
+clawteam board show <team>                # 터미널 칸반
+clawteam board live <team> --interval 3   # 자동 새로고침
+clawteam board attach <team>              # 타일형 tmux 뷰
+clawteam board serve --port 8080          # Web UI
 ```
 
 </details>
@@ -560,38 +550,41 @@ oh board serve --port 8080          # Web UI
 
 ```bash
 # 🌳 Workspace (git worktree 관리)
-oh workspace list <team>
-oh workspace checkpoint <team> <agent>    # 자동 커밋
-oh workspace merge <team> <agent>         # main에 병합
-oh workspace cleanup <team> <agent>       # worktree 제거
+clawteam workspace list <team>
+clawteam workspace checkpoint <team> <agent>    # 자동 커밋
+clawteam workspace merge <team> <agent>         # main에 병합
+clawteam workspace cleanup <team> <agent>       # worktree 제거
 
 # 📝 계획 승인
-oh plan submit <team> <agent> "plan" --summary "TL;DR"
-oh plan approve <team> <plan-id> <agent> --feedback "LGTM"
-oh plan reject <team> <plan-id> <agent> --feedback "Revise X"
+clawteam plan submit <team> <agent> "plan" --summary "TL;DR"
+clawteam plan approve <team> <plan-id> <agent> --feedback "LGTM"
+clawteam plan reject <team> <plan-id> <agent> --feedback "Revise X"
 
 # 🔄 라이프사이클
-oh lifecycle request-shutdown <team> <agent> --reason "done"
-oh lifecycle approve-shutdown <team> <request-id> <agent>
-oh lifecycle idle <team>
+clawteam lifecycle request-shutdown <team> <agent> --reason "done"
+clawteam lifecycle approve-shutdown <team> <request-id> <agent>
+clawteam lifecycle idle <team>
 
 # 🎪 템플릿
-oh launch <template> --team <name> --goal "Build X"
-oh template list
+clawteam launch <template> --team <name> --goal "Build X"
+clawteam template list
 
 # ⚙️ 설정
-oh config show
-oh config set transport p2p
-oh config health
+clawteam config show
+clawteam config set transport p2p
+clawteam config health
 ```
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `data_dir` | `CLAWTEAM_DATA_DIR` | `~/.clawteam` | 데이터 디렉터리 |
-| `transport` | `OH_TRANSPORT` | `file` | `file` 또는 `p2p` |
-| `workspace` | `OH_WORKSPACE` | `auto` | `auto` / `always` / `never` |
-| `default_backend` | `OH_DEFAULT_BACKEND` | `tmux` | `tmux` 또는 `subprocess` |
-| `skip_permissions` | `OH_SKIP_PERMISSIONS` | `true` | 에이전트 도구 자동 승인 |
+| `transport` | `CLAWTEAM_TRANSPORT` | `file` | `file` 또는 `p2p` |
+| `workspace` | `CLAWTEAM_WORKSPACE` | `auto` | `auto` / `always` / `never` |
+| `default_backend` | `CLAWTEAM_DEFAULT_BACKEND` | `tmux` | `tmux` 또는 `subprocess` |
+| `skip_permissions` | `CLAWTEAM_SKIP_PERMISSIONS` | `true` | 에이전트 도구 자동 승인 |
+
+레거시 별칭:
+호환성을 위해 `OH_*` 환경 변수도 계속 인식하지만, 새 문서와 예시는 `CLAWTEAM_*`를 사용합니다.
 
 </details>
 
@@ -603,19 +596,19 @@ oh config health
   사람: "이 LLM을 최적화해줘"
          │
          ▼
-  ┌──────────────┐     oh spawn     ┌──────────────┐
+  ┌──────────────┐     clawteam spawn     ┌──────────────┐
   │ 🦞 Leader    │ ──────────────────────► │ 🤖 Worker    │
   │ (Claude Code)│ ──────┐                │ (Claude Code)│
   │              │       │                │ git worktree │
   │ Uses:        │       │                │ tmux window  │
-  │ • spawn      │       │ oh spawn └──────────────┘
+  │ • spawn      │       │ clawteam spawn └──────────────┘
   │ • task create│       │
   │ • inbox send │       ▼                ┌──────────────┐
   │ • board show │ ──────────────────────► │ 🤖 Worker    │
   │ • task wait  │       │                │ (Codex)      │
   └──────────────┘       │                │ git worktree │
                          │                │ tmux window  │
-                         │ oh spawn └──────────────┘
+                         │ clawteam spawn └──────────────┘
                          ▼
                    ┌──────────────┐
                    │ 🤖 Worker    │    각 워커가 사용하는 명령:
@@ -639,8 +632,8 @@ oh config health
 
 | Spawn Default | Value | Override |
 |---------------|-------|----------|
-| Backend | `tmux` | `oh spawn subprocess ...` |
-| Command | `claude` | `oh spawn tmux codex ...` |
+| Backend | `tmux` | `clawteam spawn subprocess ...` |
+| Command | `claude` | `clawteam spawn tmux codex ...` |
 | Workspace | `auto` (git worktree) | `--no-workspace` |
 | Permissions | skip | `--no-skip-permissions` |
 

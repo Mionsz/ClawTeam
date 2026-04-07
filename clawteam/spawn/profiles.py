@@ -154,7 +154,7 @@ def _command_has_model_arg(command: list[str]) -> bool:
 
 
 def _model_flag(agent: str) -> str | None:
-    if agent in {"claude", "claude-code", "codex", "codex-cli", "gemini", "kimi"}:
+    if agent in {"claude", "claude-code", "codex", "codex-cli", "gemini", "kimi", "pi"}:
         return "--model"
     return None
 

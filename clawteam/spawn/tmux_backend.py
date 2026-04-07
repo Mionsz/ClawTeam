@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from xml.sax.saxutils import escape
 
 from clawteam.spawn.adapters import (
@@ -25,6 +26,10 @@ from clawteam.spawn.adapters import (
 from clawteam.spawn.base import SpawnBackend
 from clawteam.spawn.cli_env import build_spawn_path, resolve_clawteam_executable
 from clawteam.spawn.command_validation import validate_spawn_command
+from clawteam.spawn.keepalive import build_keepalive_shell_command, build_resume_command
+from clawteam.spawn.runtime_notification import render_runtime_notification
+from clawteam.spawn.session_capture import persist_spawned_session, prepare_session_capture
+from clawteam.team.models import get_data_dir
 
 _SHELL_ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
@@ -32,12 +37,13 @@ _SHELL_ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 class TmuxBackend(SpawnBackend):
     """Spawn agents in tmux windows for visual monitoring.
 
-    Each agent gets its own tmux window in a session named ``oh-{team}``.
+    Each agent gets its own tmux window in a session named ``clawteam-{team}``.
     Agents run in interactive mode so their work is visible in the tmux pane.
     """
 
     def __init__(self):
-        self._agents: dict[str, str] = {}  # agent_name -> tmux target
+        # (team_name, agent_name) -> {"target": "...", "pane_id": "%N"}
+        self._agents: dict[tuple[str, str], dict[str, str]] = {}
         self._adapter = NativeCliAdapter()
 
     def spawn(
@@ -52,6 +58,8 @@ class TmuxBackend(SpawnBackend):
         cwd: str | None = None,
         skip_permissions: bool = False,
         system_prompt: str | None = None,
+        is_leader: bool = False,
+        keepalive: bool = False,
     ) -> str:
         if not shutil.which("tmux"):
             return "Error: tmux not installed"
@@ -64,12 +72,13 @@ class TmuxBackend(SpawnBackend):
         # normalize TERM to a sensible value before exporting it into the pane.
         if env_vars.get("TERM", "").lower() == "dumb":
             env_vars["TERM"] = "xterm-256color"
+        env_vars.setdefault("CLAWTEAM_DATA_DIR", str(get_data_dir()))
         env_vars.update({
             "CLAWTEAM_AGENT_ID": agent_id,
             "CLAWTEAM_AGENT_NAME": agent_name,
             "CLAWTEAM_AGENT_TYPE": agent_type,
             "CLAWTEAM_TEAM_NAME": team_name,
-            "CLAWTEAM_AGENT_LEADER": "0",
+            "CLAWTEAM_AGENT_LEADER": "1" if is_leader else "0",
         })
         if cwd:
             env_vars["CLAWTEAM_WORKSPACE_DIR"] = cwd
@@ -81,13 +90,21 @@ class TmuxBackend(SpawnBackend):
         if os.path.isabs(clawteam_bin):
             env_vars.setdefault("CLAWTEAM_BIN", clawteam_bin)
 
-        prepared = self._adapter.prepare_command(
+        session_capture = prepare_session_capture(
             command,
+            team_name=team_name,
+            agent_name=agent_name,
+            cwd=cwd,
+            prompt=prompt,
+        )
+        prepared = self._adapter.prepare_command(
+            session_capture.command,
             prompt=prompt,
             cwd=cwd,
             skip_permissions=skip_permissions,
             agent_name=agent_name,
             interactive=True,
+            container_env=env_vars,
         )
         normalized_command = prepared.normalized_command
         validation_command = normalized_command
@@ -96,6 +113,24 @@ class TmuxBackend(SpawnBackend):
         if system_prompt and (is_claude_command(normalized_command) or is_pi_command(normalized_command)):
             insert_at = final_command.index("-p") if "-p" in final_command else len(final_command)
             final_command[insert_at:insert_at] = ["--append-system-prompt", system_prompt]
+        resume_base = build_resume_command(normalized_command)
+        resume_command: list[str] = []
+        if resume_base:
+            resume_prepared = self._adapter.prepare_command(
+                resume_base,
+                cwd=cwd,
+                skip_permissions=skip_permissions,
+                agent_name=agent_name,
+                interactive=True,
+                container_env=env_vars,
+            )
+            resume_command = list(resume_prepared.final_command)
+            if system_prompt and (
+                is_claude_command(resume_prepared.normalized_command)
+                or is_pi_command(resume_prepared.normalized_command)
+            ):
+                insert_at = resume_command.index("-p") if "-p" in resume_command else len(resume_command)
+                resume_command[insert_at:insert_at] = ["--append-system-prompt", system_prompt]
 
         command_error = validate_spawn_command(validation_command, path=env_vars["PATH"], cwd=cwd)
         if command_error:
@@ -106,17 +141,36 @@ class TmuxBackend(SpawnBackend):
         # WSL includes names like `PROGRAMFILES(X86)`, which would abort the
         # shell before the pane becomes observable.
         export_vars = {k: v for k, v in env_vars.items() if _SHELL_ENV_KEY_RE.fullmatch(k)}
-        export_str = "; ".join(f"export {k}={shlex.quote(v)}" for k, v in export_vars.items())
 
-        cmd_str = " ".join(shlex.quote(c) for c in final_command)
-        exit_cmd = shlex.quote(clawteam_bin) if os.path.isabs(clawteam_bin) else "clawteam"
+        # Write env vars to a temp file and source it to avoid exceeding
+        # tmux's command-length limit (~16k chars).  The file is deliberately
+        # NOT deleted here — the sourcing shell needs it at startup.  A
+        # self-cleanup line inside the file removes it after it has been read.
+        env_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".env.sh", delete=False, prefix="clawteam-env-"
+        )
+        for k, v in export_vars.items():
+            env_file.write(f"export {k}={shlex.quote(v)}\n")
+        # Self-cleanup: remove the env file after sourcing
+        env_file.write(f"rm -f {shlex.quote(env_file.name)}\n")
+        env_file.close()
+        env_source_cmd = f". {shlex.quote(env_file.name)}"
+
+        wrapped_cmd = build_keepalive_shell_command(
+            final_command,
+            resume_command=resume_command,
+            clawteam_bin=clawteam_bin if os.path.isabs(clawteam_bin) else "clawteam",
+            team_name=team_name,
+            agent_name=agent_name,
+            keepalive=keepalive,
+        )
         # Unset Claude nesting-detection env vars so spawned claude agents
         # don't refuse to start when the leader is itself a claude session.
         unset_clause = "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION 2>/dev/null; "
         if cwd:
-            full_cmd = f"{unset_clause}{export_str}; cd {shlex.quote(cwd)} && {cmd_str}"
+            full_cmd = f"{unset_clause}{env_source_cmd}; cd {shlex.quote(cwd)} && {wrapped_cmd}"
         else:
-            full_cmd = f"{unset_clause}{export_str}; {cmd_str}"
+            full_cmd = f"{unset_clause}{env_source_cmd}; {wrapped_cmd}"
 
         # Check if tmux session exists
         check = subprocess.run(
@@ -144,13 +198,22 @@ class TmuxBackend(SpawnBackend):
             stderr = launch.stderr.decode() if isinstance(launch.stderr, bytes) else launch.stderr
             return f"Error: failed to launch tmux session: {(stderr or '').strip()}"
 
+        # Keep leader pane alive even if the agent process exits, so it can be
+        # re-activated or inspected later.
+        if is_leader:
+            subprocess.run(
+                ["tmux", "set-option", "-t", target, "remain-on-exit", "on"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+
         # Set tmux native hooks for reliable lifecycle management
+        clawteam_cmd = shlex.quote(clawteam_bin) if os.path.isabs(clawteam_bin) else "clawteam"
         _exit_hook_cmd = (
-            f"{exit_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
+            f"{clawteam_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
             f"--agent {shlex.quote(agent_name)}"
         )
         _crash_hook_cmd = (
-            f"{exit_cmd} lifecycle on-crash --team {shlex.quote(team_name)} "
+            f"{clawteam_cmd} lifecycle on-crash --team {shlex.quote(team_name)} "
             f"--agent {shlex.quote(agent_name)}"
         )
         subprocess.run(
@@ -167,7 +230,7 @@ class TmuxBackend(SpawnBackend):
         from clawteam.config import load_config
 
         cfg = load_config()
-        pane_ready_timeout = min(cfg.spawn_ready_timeout, max(4.0, cfg.spawn_prompt_delay + 2.0))
+        pane_ready_timeout = min(cfg.spawn_ready_timeout, max(15.0, cfg.spawn_prompt_delay + 2.0))
         if not _wait_for_tmux_pane(
             target,
             timeout_seconds=pane_ready_timeout,
@@ -176,7 +239,7 @@ class TmuxBackend(SpawnBackend):
             return (
                 f"Error: tmux pane for '{normalized_command[0]}' did not become visible "
                 f"within {pane_ready_timeout:.1f}s. Verify the CLI works standalone before "
-                "using it with oh spawn."
+                "using it with clawteam spawn."
             )
 
         _confirm_workspace_trust_if_prompted(
@@ -222,7 +285,20 @@ class TmuxBackend(SpawnBackend):
                 stderr=subprocess.PIPE,
             )
 
-        self._agents[agent_name] = target
+        # Capture pane id (e.g. %42) so future runtime injections target by
+        # stable pane id rather than the user-renamable window name.
+        pane_id = ""
+        pane_id_result = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", target, "#{pane_id}"],
+            capture_output=True, text=True,
+        )
+        if pane_id_result.returncode == 0:
+            pane_id = pane_id_result.stdout.strip()
+
+        self._agents[(team_name, agent_name)] = {
+            "target": target,
+            "pane_id": pane_id,
+        }
 
         # Capture pane PID for robust liveness checking (survives tile operations)
         pane_pid = 0
@@ -246,6 +322,12 @@ class TmuxBackend(SpawnBackend):
             pid=pane_pid,
             command=list(final_command),
         )
+        persist_spawned_session(
+            session_capture,
+            team_name=team_name,
+            agent_name=agent_name,
+            command=list(final_command),
+        )
 
         # Emit AfterWorkerSpawn event
         try:
@@ -265,8 +347,14 @@ class TmuxBackend(SpawnBackend):
 
     def list_running(self) -> list[dict[str, str]]:
         return [
-            {"name": name, "target": target, "backend": "tmux"}
-            for name, target in self._agents.items()
+            {
+                "name": agent,
+                "team": team,
+                "target": rec.get("target", ""),
+                "pane_id": rec.get("pane_id", ""),
+                "backend": "tmux",
+            }
+            for (team, agent), rec in self._agents.items()
         ]
 
     def inject_runtime_message(self, team: str, agent_name: str, envelope) -> tuple[bool, str]:
@@ -274,7 +362,11 @@ class TmuxBackend(SpawnBackend):
         if not shutil.which("tmux"):
             return False, "tmux not installed"
 
-        target = f"{self.session_name(team)}:{agent_name}"
+        record = self._agents.get((team, agent_name)) or {}
+        recorded_pane = (record.get("pane_id") or "").strip()
+        fallback_target = f"{self.session_name(team)}:{agent_name}"
+        target = recorded_pane or fallback_target
+
         probe = subprocess.run(
             ["tmux", "list-panes", "-t", target, "-F", "#{pane_id}"],
             capture_output=True,
@@ -283,11 +375,17 @@ class TmuxBackend(SpawnBackend):
         if probe.returncode != 0 or not probe.stdout.strip():
             return False, f"tmux target '{target}' not found"
 
+        if not _pane_safe_to_inject(target):
+            return False, (
+                f"refusing to inject into '{target}': pane is not running an "
+                "agent CLI (likely a shell or sub-TUI)"
+            )
+
         try:
             _inject_prompt_via_buffer(
                 target,
                 agent_name,
-                _render_runtime_notification(envelope),
+                render_runtime_notification(envelope),
             )
         except Exception as exc:
             return False, f"runtime injection failed for '{target}': {exc}"
@@ -618,6 +716,55 @@ def _wait_for_tui_ready(
     time.sleep(fallback_delay)
 
 
+# Foreground commands a pane may be running where it is *safe* to paste a
+# notification block. Anything not on this list — bash, zsh, fish, less,
+# vim, fzf, tmux itself, etc. — would interpret the paste as terminal input
+# (potentially executing $() / backticks). Refuse injection in those cases.
+_INJECT_SAFE_COMMANDS = frozenset({
+    "claude",
+    "codex",
+    "gemini",
+    "kimi",
+    "qwen",
+    "opencode",
+    "nanobot",
+    "openclaw",
+    "pi",
+    "node",      # claude-cli runs as node when not symlinked
+    "python",
+    "python3",
+})
+
+
+def _pane_safe_to_inject(target: str) -> bool:
+    """Return True only when the pane's foreground command looks like an agent CLI."""
+    probe = subprocess.run(
+        ["tmux", "display-message", "-p", "-t", target, "#{pane_current_command}"],
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode != 0:
+        return False
+    cmd = probe.stdout.strip().lower()
+    return cmd in _INJECT_SAFE_COMMANDS
+
+
+def _run_tmux(args: list[str]) -> None:
+    """Run a tmux subcommand and raise RuntimeError on non-zero exit.
+
+    Replaces the unchecked ``subprocess.run`` calls that previously masked
+    paste-buffer / load-buffer failures as success.
+    """
+    result = subprocess.run(
+        ["tmux", *args],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip() or "(no stderr)"
+        raise RuntimeError(f"tmux {args[0]} failed (exit {result.returncode}): {stderr}")
+
+
 def _inject_prompt_via_buffer(
     target: str,
     agent_name: str,
@@ -625,11 +772,11 @@ def _inject_prompt_via_buffer(
 ) -> None:
     """Inject a prompt into a tmux pane via ``load-buffer`` / ``paste-buffer``.
 
-    Using a temp file avoids the shell-escaping pitfalls of ``send-keys`` for
-    multi-line or special-character prompts. Two Enter keystrokes are sent
-    after the paste to confirm and submit.
+    Uses a per-call unique buffer name so concurrent injections can't clobber
+    each other. Every tmux subcommand return code is checked; failures raise
+    RuntimeError instead of silently reporting success.
     """
-    buf_name = f"prompt-{agent_name}"
+    buf_name = f"prompt-{agent_name}-{uuid.uuid4().hex[:8]}"
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, prefix="clawteam-prompt-"
     ) as f:
@@ -637,68 +784,15 @@ def _inject_prompt_via_buffer(
         tmp_path = f.name
 
     try:
-        subprocess.run(
-            ["tmux", "load-buffer", "-b", buf_name, tmp_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        subprocess.run(
-            ["tmux", "paste-buffer", "-b", buf_name, "-t", target],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        _run_tmux(["load-buffer", "-b", buf_name, tmp_path])
+        _run_tmux(["paste-buffer", "-b", buf_name, "-t", target])
         time.sleep(0.5)
-        subprocess.run(
-            ["tmux", "send-keys", "-t", target, "Enter"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        _run_tmux(["send-keys", "-t", target, "Enter"])
         time.sleep(0.3)
-        subprocess.run(
-            ["tmux", "send-keys", "-t", target, "Enter"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        subprocess.run(
-            ["tmux", "delete-buffer", "-b", buf_name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        _run_tmux(["send-keys", "-t", target, "Enter"])
+        try:
+            _run_tmux(["delete-buffer", "-b", buf_name])
+        except RuntimeError:
+            pass
     finally:
         os.unlink(tmp_path)
-
-def _render_runtime_notification(envelope) -> str:
-    summary = str(getattr(envelope, "summary", "") or "").strip()
-    if not summary:
-        summary = "Runtime update"
-
-    evidence = getattr(envelope, "evidence", []) or []
-    if isinstance(evidence, str):
-        evidence = [evidence]
-    evidence_block = "\n".join(str(item) for item in evidence if item)
-
-    lines = [
-        '<clawteam_notification version="1"',
-        f'  source="{escape(str(getattr(envelope, "source", "system") or "system"))}"',
-        f'  target="{escape(str(getattr(envelope, "target", "") or ""))}"',
-        f'  channel="{escape(str(getattr(envelope, "channel", "direct") or "direct"))}"',
-        f'  priority="{escape(str(getattr(envelope, "priority", "medium") or "medium"))}">',
-        "<summary>",
-        escape(summary),
-        "</summary>",
-    ]
-
-    if evidence_block:
-        lines.extend(["<evidence>", escape(evidence_block), "</evidence>"])
-    recommended_next_action = str(getattr(envelope, "recommended_next_action", "") or "").strip()
-    if recommended_next_action:
-        lines.extend(
-            [
-                "<recommended_next_action>",
-                escape(recommended_next_action),
-                "</recommended_next_action>",
-            ]
-        )
-
-    lines.append("</clawteam_notification>")
-    return "\n".join(lines)

@@ -89,6 +89,7 @@ class PhaseRoleSpawner(SpawnStrategy):
                     prompt=task_prompt,
                     system_prompt=system_prompt,
                     skip_permissions=cfg.skip_permissions,
+                    keepalive=True,
                 )
                 if not result.startswith("Error"):
                     spawned.append(agent_name)
@@ -125,6 +126,7 @@ class PhaseRoleSpawner(SpawnStrategy):
                 team_name=team_name,
                 prompt=extra_prompt or None,
                 skip_permissions=cfg.skip_permissions,
+                keepalive=True,
             )
             return result
         except Exception as e:

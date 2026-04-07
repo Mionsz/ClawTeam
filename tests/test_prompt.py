@@ -99,6 +99,66 @@ class TestBuildAgentPrompt:
         )
         assert "Worker Loop Protocol" in prompt
         assert "Do not exit after the first task" in prompt
+        assert "do not start a detached daemon/watch loop" in prompt
+        assert "Keep the monitoring/reporting loop in the foreground" in prompt
         assert "scan `clawteam task list my-team`" in prompt
         assert "clawteam inbox receive my-team --agent dev" in prompt
         assert "clawteam lifecycle idle my-team" in prompt
+
+
+class TestRoleAwarePrompt:
+    """Tests for the role-aware Required Reading + ClawTeam-trigger augmentation."""
+
+    def test_role_none_preserves_legacy_behaviour(self):
+        prompt = build_agent_prompt(
+            agent_name="w", agent_id="id", agent_type="t",
+            team_name="team", leader_name="lead", task="task",
+        )
+        assert "Required Reading" not in prompt
+        assert "ClawTeam Mention Trigger" not in prompt
+        assert "Role:" not in prompt
+
+    def test_role_emits_required_reading_section(self):
+        prompt = build_agent_prompt(
+            agent_name="w", agent_id="id", agent_type="t",
+            team_name="team", leader_name="lead", task="task",
+            role="coder",
+        )
+        assert "Required Reading" in prompt
+        assert "AGENTS.md" in prompt
+        assert "Role: coder (maker)" in prompt
+        # Maker class does NOT get the trigger inline.
+        assert "ClawTeam Mention Trigger" not in prompt
+
+    def test_orchestrator_role_inlines_clawteam_trigger(self):
+        prompt = build_agent_prompt(
+            agent_name="w", agent_id="id", agent_type="t",
+            team_name="team", leader_name="lead", task="task",
+            role="nic-port-orchestrator",
+            repo_root="/opt/repo",
+        )
+        assert "Required Reading" in prompt
+        assert "ClawTeam Mention Trigger" in prompt
+        assert "Role: nic-port-orchestrator (orchestrator)" in prompt
+        # Absolute paths rendered when repo_root provided.
+        assert "/opt/repo/AGENTS.md" in prompt
+        assert "/opt/repo/.github/agents/" in prompt
+
+    def test_unknown_role_falls_back_to_generic(self):
+        prompt = build_agent_prompt(
+            agent_name="w", agent_id="id", agent_type="t",
+            team_name="team", leader_name="lead", task="task",
+            role="some-unmapped-role",
+        )
+        assert "Required Reading" in prompt
+        assert "Role: some-unmapped-role (generic)" in prompt
+        assert "ClawTeam Mention Trigger" not in prompt
+
+    def test_manage_role_inlines_clawteam_trigger(self):
+        prompt = build_agent_prompt(
+            agent_name="mgr", agent_id="id", agent_type="t",
+            team_name="team", leader_name="lead", task="task",
+            role="manage",
+        )
+        assert "ClawTeam Mention Trigger" in prompt
+        assert "clawteam-manager.agent.md" in prompt
