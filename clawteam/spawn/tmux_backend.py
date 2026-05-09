@@ -227,7 +227,7 @@ class TmuxBackend(SpawnBackend):
         from clawteam.config import load_config
 
         cfg = load_config()
-        pane_ready_timeout = min(cfg.spawn_ready_timeout, max(4.0, cfg.spawn_prompt_delay + 2.0))
+        pane_ready_timeout = min(cfg.spawn_ready_timeout, max(15.0, cfg.spawn_prompt_delay + 2.0))
         if not _wait_for_tmux_pane(
             target,
             timeout_seconds=pane_ready_timeout,
