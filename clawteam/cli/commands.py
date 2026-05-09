@@ -1162,6 +1162,7 @@ def team_spawn_team(
 ):
     """Create a new team and register the leader (spawnTeam)."""
     from clawteam.identity import AgentIdentity
+    from clawteam.spawn.session_capture import save_current_agent_session
     from clawteam.team.manager import TeamManager
 
     identity = AgentIdentity.from_env()
@@ -1182,11 +1183,15 @@ def team_spawn_team(
             "leadAgentId": leader_id,
             "leaderName": leader_name,
         }
+        session_id = save_current_agent_session(name, leader_name)
+        if session_id:
+            result["sessionId"] = session_id
         if identity.user:
             result["user"] = identity.user
         _output(result, lambda d: (
             console.print(f"[green]OK[/green] Team '{name}' created"),
             console.print(f"  Leader: {leader_name} (id: {leader_id})"),
+            console.print(f"  Session: {d['sessionId']}") if d.get("sessionId") else None,
         ))
     except ValueError as e:
         if _json_output:
@@ -1573,6 +1578,53 @@ def team_status(
     _output(data, _human)
 
 
+@team_app.command("watch")
+def team_watch(
+    team: str = typer.Argument(..., help="Team name"),
+    leader: Optional[str] = typer.Option(None, "--leader", "-l", help="Leader agent name (default: from team config)"),
+    interval: float = typer.Option(60.0, "--interval", "-i", help="Polling fallback interval in seconds"),
+    heartbeat_interval: float = typer.Option(
+        300.0,
+        "--heartbeat-interval",
+        help="Periodic reminder interval in seconds even when state is unchanged",
+    ),
+    redis_mode: str = typer.Option(
+        "auto",
+        "--redis",
+        help="Redis wakeup mode: auto, off, or redis://host:port/db",
+    ),
+):
+    """Watch team state and periodically wake the leader agent."""
+    from clawteam.team.leader_watcher import LeaderWatcher
+    from clawteam.team.manager import TeamManager
+
+    config = TeamManager.get_team(team)
+    if not config:
+        _output({"error": f"Team '{team}' not found"}, lambda d: console.print(f"[red]{d['error']}[/red]"))
+        raise typer.Exit(1)
+
+    leader_name = leader or TeamManager.get_leader_name(team)
+    if not leader_name:
+        _output({"error": f"No leader found for team '{team}'"}, lambda d: console.print(f"[red]{d['error']}[/red]"))
+        raise typer.Exit(1)
+
+    watcher = LeaderWatcher(
+        team_name=team,
+        leader_name=leader_name,
+        interval=interval,
+        heartbeat_interval=heartbeat_interval,
+        redis_mode=redis_mode,
+        json_output=_json_output,
+        verbose=not _json_output,
+    )
+    if not _json_output:
+        console.print(
+            f"Watching team '[cyan]{team}[/cyan]' for leader '[cyan]{leader_name}[/cyan]' "
+            f"(interval: {interval}s, heartbeat: {heartbeat_interval}s, redis: {redis_mode})."
+        )
+    watcher.run()
+
+
 @team_app.command("snapshot")
 def team_snapshot(
     team: str = typer.Argument(..., help="Team name"),
@@ -1705,15 +1757,22 @@ app.add_typer(inbox_app, name="inbox")
 def inbox_send(
     team: str = typer.Argument(..., help="Team name"),
     to: str = typer.Argument(..., help="Recipient agent name"),
-    content: str = typer.Argument(..., help="Message content"),
+    content: Optional[str] = typer.Argument(None, help="Message content", metavar="[CONTENT]"),
     key: Optional[str] = typer.Option(None, "--key", "-k", help="Optional routing key"),
     msg_type: str = typer.Option("message", "--type", help="Message type"),
     from_agent: Optional[str] = typer.Option(None, "--from", "-f", help="Override sender name (default: from env identity)"),
 ):
     """Send a point-to-point message (write)."""
+    import sys
+
     from clawteam.identity import AgentIdentity
     from clawteam.team.mailbox import MailboxManager
     from clawteam.team.models import MessageType
+
+    if content is None:
+        content = sys.stdin.read()
+        if content.endswith("\n"):
+            content = content[:-1]
 
     sender = from_agent or AgentIdentity.from_env().agent_name
     mailbox = MailboxManager(team)
@@ -1861,6 +1920,7 @@ def inbox_watch(
     With --exec, runs a shell command for each message. Message data is passed
     via env vars: CLAWTEAM_MSG_FROM, CLAWTEAM_MSG_TO, CLAWTEAM_MSG_CONTENT,
     CLAWTEAM_MSG_TYPE, CLAWTEAM_MSG_TIMESTAMP, CLAWTEAM_MSG_JSON.
+    Legacy OH_MSG_* aliases are still exported for compatibility.
     """
     from clawteam.identity import AgentIdentity
     from clawteam.team.mailbox import MailboxManager
@@ -1891,8 +1951,17 @@ def inbox_watch(
 # Runtime Commands
 # ============================================================================
 
-runtime_app = typer.Typer(help="Tmux-only runtime routing and live injection")
+runtime_app = typer.Typer(help="Runtime routing and live injection for supported interactive backends")
 app.add_typer(runtime_app, name="runtime")
+
+
+def _resolve_runtime_backend(team: str, agent_name: str):
+    from clawteam.spawn import get_backend
+    from clawteam.spawn.registry import get_registry
+
+    info = get_registry(team).get(agent_name, {})
+    backend_name = info.get("backend", "tmux") or "tmux"
+    return backend_name, get_backend(backend_name)
 
 
 @runtime_app.command("inject")
@@ -1910,8 +1979,7 @@ def runtime_inject(
         help="Optional recommended next action",
     ),
 ):
-    """Inject a structured runtime notification into a running tmux agent."""
-    from clawteam.spawn.tmux_backend import TmuxBackend
+    """Inject a structured runtime notification into a running agent session."""
     from clawteam.team.routing_policy import RuntimeEnvelope
 
     envelope = RuntimeEnvelope(
@@ -1924,13 +1992,18 @@ def runtime_inject(
         evidence=list(evidence),
         recommended_next_action=recommended_next_action,
     )
-    ok, status = TmuxBackend().inject_runtime_message(team, agent, envelope)
+    backend_name, backend = _resolve_runtime_backend(team, agent)
+    if not hasattr(backend, "inject_runtime_message"):
+        console.print(f"[red]Backend '{backend_name}' does not support runtime injection.[/red]")
+        raise typer.Exit(1)
+
+    ok, status = backend.inject_runtime_message(team, agent, envelope)
     if not ok:
         console.print(f"[red]{status}[/red]")
         raise typer.Exit(1)
 
     _output(
-        {"team": team, "agent": agent, "status": status},
+        {"team": team, "agent": agent, "backend": backend_name, "status": status},
         lambda data: console.print(f"[green]OK[/green] {data['status']}"),
     )
 
@@ -1947,7 +2020,7 @@ def runtime_watch(
         help="Shell command to run for each new message (msg data in env vars)",
     ),
 ):
-    """Watch an inbox and route new messages into the running tmux session."""
+    """Watch an inbox and route new messages into the running agent session."""
     from clawteam.identity import AgentIdentity
     from clawteam.team.mailbox import MailboxManager
     from clawteam.team.manager import TeamManager
@@ -1955,12 +2028,21 @@ def runtime_watch(
     from clawteam.team.watcher import InboxWatcher
 
     identity = AgentIdentity.from_env()
-    agent_name = TeamManager.resolve_inbox(team, agent or identity.agent_name, identity.user)
+    session_agent_name = agent or identity.agent_name
+    backend_name, _ = _resolve_runtime_backend(team, session_agent_name)
+    if backend_name == "subprocess":
+        console.print(
+            "[red]runtime watch is not supported for subprocess agents.[/red]\n"
+            "Use `runtime inject` for headless delivery or rely on the normal inbox polling loop."
+        )
+        raise typer.Exit(1)
+
+    agent_name = TeamManager.resolve_inbox(team, session_agent_name, identity.user)
     mailbox = MailboxManager(team)
     router = RuntimeRouter(
         team_name=team,
         agent_name=agent_name,
-        session_agent_name=agent or identity.agent_name,
+        session_agent_name=session_agent_name,
     )
 
     if not _json_output:
@@ -2542,9 +2624,11 @@ app.add_typer(session_app, name="session")
 @session_app.command("save")
 def session_save(
     team: str = typer.Argument(..., help="Team name"),
-    session_id: str = typer.Option("", "--session-id", "-s", help="Claude Code session ID"),
+    session_id: str = typer.Option("", "--session-id", "-s", help="Native client session ID"),
     last_task: str = typer.Option("", "--last-task", help="Last task ID worked on"),
     agent: Optional[str] = typer.Option(None, "--agent", "-a", help="Agent name (default: from env)"),
+    client: str = typer.Option("", "--client", help="Client name such as claude, codex, gemini"),
+    cwd: str = typer.Option("", "--cwd", help="Workspace directory for this session"),
 ):
     """Save agent session for later resume."""
     from clawteam.identity import AgentIdentity
@@ -2556,6 +2640,12 @@ def session_save(
         agent_name=agent_name,
         session_id=session_id,
         last_task_id=last_task,
+        state={
+            "client": client,
+            "source": "manual",
+            "cwd": cwd,
+            "confidence": "exact" if session_id else "",
+        },
     )
     data = _dump(session)
     _output(data, lambda d: console.print(f"[green]OK[/green] Session saved for '{agent_name}'"))
@@ -2576,9 +2666,13 @@ def session_show(
             _output({"error": f"No session for '{agent}'"}, lambda d: console.print(f"[dim]{d['error']}[/dim]"))
             return
         data = _dump(session)
+        state = data.get("state") or {}
         _output(data, lambda d: (
             console.print(f"Session: [cyan]{d.get('agentName', '')}[/cyan]"),
             console.print(f"  Session ID: {d.get('sessionId', '')}"),
+            console.print(f"  Client:     {state.get('client', '')}"),
+            console.print(f"  Source:     {state.get('source', '')} ({state.get('confidence', '')})"),
+            console.print(f"  CWD:        {state.get('cwd', '')}"),
             console.print(f"  Last task:  {d.get('lastTaskId', '')}"),
             console.print(f"  Saved at:   {format_timestamp(d.get('savedAt', ''))}"),
         ))
@@ -2592,12 +2686,17 @@ def session_show(
                 return
             table = Table(title=f"Sessions — {team}")
             table.add_column("Agent", style="cyan")
+            table.add_column("Client")
+            table.add_column("Confidence")
             table.add_column("Session ID")
             table.add_column("Last Task", style="dim")
             table.add_column("Saved At", style="dim")
             for s in items:
+                state = s.get("state") or {}
                 table.add_row(
                     s.get("agentName", ""),
+                    state.get("client", ""),
+                    state.get("confidence", ""),
                     s.get("sessionId", ""),
                     s.get("lastTaskId", ""),
                     format_timestamp(s.get("savedAt")),
@@ -2841,6 +2940,14 @@ def lifecycle_on_exit(
     from clawteam.team.models import TaskStatus
     from clawteam.team.tasks import TaskStore
 
+    # Write exit journal entry for conductor cross-process notification
+    try:
+        from clawteam.harness.exit_journal import FileExitJournal
+        journal = FileExitJournal(team)
+        journal.record_exit(agent_name=agent)
+    except Exception:
+        pass
+
     # Always clean up the agent's session file, regardless of task status.
     # Without this, session files accumulate indefinitely under
     # ~/.clawteam/sessions/{team}/ after every agent exit.
@@ -2873,6 +2980,17 @@ def lifecycle_on_exit(
                     f"Reset {len(abandoned)} task(s) to pending: {task_subjects}",
         )
 
+    # Emit WorkerExit event
+    try:
+        from clawteam.events.global_bus import get_event_bus
+        from clawteam.events.types import WorkerExit
+        get_event_bus().emit(WorkerExit(
+            team_name=team, agent_name=agent,
+            abandoned_tasks=[t.id for t in abandoned],
+        ))
+    except Exception:
+        pass
+
     _output(
         {
             "status": "agent_exited",
@@ -2884,6 +3002,48 @@ def lifecycle_on_exit(
             f"Reset {len(d['abandoned_tasks'])} task(s) to pending."
         ),
     )
+
+
+@lifecycle_app.command("should-keepalive")
+def lifecycle_should_keepalive(
+    team: str = typer.Option(..., "--team", "-t", help="Team name"),
+    agent: str = typer.Option(..., "--agent", "-n", help="Agent name"),
+):
+    """Exit zero when an agent should auto-resume after a clean exit."""
+    from clawteam.team.mailbox import MailboxManager
+    from clawteam.team.manager import TeamManager
+    from clawteam.team.models import MessageType
+
+    if TeamManager.get_team(team) is None:
+        raise typer.Exit(1)
+
+    inbox_name = TeamManager.resolve_inbox(team, agent)
+    mailbox = MailboxManager(team)
+    for msg in mailbox.peek(inbox_name):
+        if msg.type == MessageType.shutdown_approved:
+            raise typer.Exit(1)
+
+    raise typer.Exit(0)
+
+
+@lifecycle_app.command("on-crash")
+def lifecycle_on_crash(
+    team: str = typer.Option(..., "--team", "-t", help="Team name"),
+    agent: str = typer.Option(..., "--agent", "-n", help="Agent name"),
+):
+    """Handle agent process crash (pane-died). Emits WorkerCrash event."""
+    # Reuse the same cleanup logic as on-exit
+    lifecycle_on_exit(team=team, agent=agent)
+
+    # Additionally emit a WorkerCrash event
+    try:
+        from clawteam.events.global_bus import get_event_bus
+        from clawteam.events.types import WorkerCrash
+        get_event_bus().emit(WorkerCrash(
+            team_name=team, agent_name=agent, error="pane-died",
+        ))
+    except Exception:
+        pass
 
 
 @lifecycle_app.command("check-zombies")
@@ -2944,7 +3104,9 @@ def spawn_agent(
     skip_permissions: Optional[bool] = typer.Option(None, "--skip-permissions/--no-skip-permissions", help="Skip tool approval for claude (default: from config, true)"),
     resume: bool = typer.Option(False, "--resume", "-r", help="Resume previous session if available"),
     replace: bool = typer.Option(False, "--replace", help="Replace a running agent with the same name"),
+    keepalive: bool = typer.Option(True, "--keepalive/--no-keepalive", help="Keep resumable interactive agents attached and auto-resume after clean exit"),
     skill: Optional[list[str]] = typer.Option(None, "--skill", help="Skill name(s) to inject into the agent's system prompt (repeatable, claude only)"),
+    role: Optional[str] = typer.Option(None, "--role", help="Role hint (e.g. orchestrator, tdd-writer, coder, manage). Auto-attaches default skills, surfaces required reading, and pins cwd to repo root for orchestrator-class roles."),
 ):
     """Spawn a new agent process with identity + task as its initial prompt.
 
@@ -2957,6 +3119,19 @@ def spawn_agent(
     from clawteam.config import get_effective
     from clawteam.spawn import get_backend
     from clawteam.spawn.profiles import apply_profile, load_profile, resolve_profile_name
+    from clawteam.spawn.role_defaults import resolve_role, merged_skill_list
+    from clawteam.spawn.skills_link import ensure_skills_symlinked
+
+    role_profile = resolve_role(role)
+    # Merge role-default skills with user-specified skills (only when a role
+    # was explicitly given; passing no role preserves legacy spawn behaviour).
+    if role:
+        skill = merged_skill_list(role_profile, list(skill) if skill else None) or None
+
+    # Orchestrator-class roles must run from the repo root so they inherit
+    # AGENTS.md / .github discovery; force-disable the worktree.
+    if role_profile.prefer_root_cwd and workspace is None:
+        workspace = False
 
     # Resolve defaults from config
     if backend is None:
@@ -3041,6 +3216,32 @@ def spawn_agent(
         import os as _os_repo
         cwd = _os_repo.path.abspath(repo)
 
+    # Resolve repo_root for required-reading absolute paths and skill symlinks.
+    repo_root_path: Optional[str] = None
+    try:
+        from pathlib import Path as _PathRR
+        candidate = repo or os.getcwd()
+        candidate_path = _PathRR(candidate).resolve()
+        # Walk up looking for AGENTS.md (root governance file).
+        for parent in [candidate_path, *candidate_path.parents]:
+            if (parent / "AGENTS.md").exists():
+                repo_root_path = str(parent)
+                break
+    except Exception:
+        repo_root_path = None
+
+    # If orchestrator/manager role wants root cwd, override now.
+    if role_profile.prefer_root_cwd and repo_root_path:
+        cwd = repo_root_path
+        ws_branch = ""
+
+    # Idempotently symlink repo skills into ~/.claude/skills/ so --skill works.
+    if repo_root_path:
+        try:
+            ensure_skills_symlinked(repo_root_path)
+        except Exception:
+            pass
+
     profile_env: dict[str, str] = {}
     if profile:
         try:
@@ -3083,12 +3284,14 @@ def spawn_agent(
     except ValueError:
         pass  # already a member, ignore
 
+    leader_name = TeamManager.get_leader_name(_team) or "leader"
+    is_leader = _name == leader_name
+
     # Build prompt: identity + task + clawteam coordination guide
     prompt = None
     if task:
         from clawteam.spawn.prompt import build_agent_prompt
 
-        leader_name = TeamManager.get_leader_name(_team) or "leader"
         prompt = build_agent_prompt(
             agent_name=_name,
             agent_id=_id,
@@ -3099,19 +3302,23 @@ def spawn_agent(
             user=user_name,
             workspace_dir=cwd or "",
             workspace_branch=ws_branch,
-            isolated_workspace=bool(workspace and cwd),
+            isolated_workspace=bool(workspace and cwd) and not role_profile.prefer_root_cwd,
             repo_path=repo,
+            role=role,
+            repo_root=repo_root_path,
         )
 
-    # Session resume: inject --resume flag for claude commands
+    # Session resume: inject the native client resume flag.
     if resume:
+        from clawteam.spawn.session_capture import build_resume_command as build_cli_resume_command
         from clawteam.spawn.sessions import SessionStore
         session_store = SessionStore(_team)
         session = session_store.load(_name)
         if session and session.session_id:
-            # Add --resume to claude command
-            if command and Path(command[0]).name in ("claude", "claude-code"):
-                command = list(command) + ["--resume", session.session_id]
+            client = str((getattr(session, "state", None) or {}).get("client") or "")
+            resumed_command = build_cli_resume_command(command, session.session_id, client=client)
+            if resumed_command != list(command):
+                command = resumed_command
                 console.print(f"[dim]Resuming session: {session.session_id}[/dim]")
             if prompt:
                 prompt += "\nYou are resuming a previous session."
@@ -3141,6 +3348,8 @@ def spawn_agent(
         cwd=cwd,
         skip_permissions=skip_permissions,
         system_prompt=system_prompt,
+        is_leader=is_leader,
+        keepalive=keepalive,
     )
 
     if result.startswith("Error"):
@@ -4016,6 +4225,8 @@ def launch_team(
             env=a_env or None,
             cwd=cwd,
             skip_permissions=skip_permissions,
+            is_leader=(agent.name == tmpl.leader.name),
+            keepalive=True,
         )
         spawned.append({"name": agent.name, "id": a_id, "type": agent.type, "result": result})
 
@@ -4044,6 +4255,459 @@ def launch_team(
         console.print(f"[bold]Inbox:[/bold]  clawteam inbox peek {t_name} --agent <name>")
 
     _output(out, _human)
+
+
+# ── Hook management ────────────────────────────────────────────────────
+
+hook_app = typer.Typer(help="Event hook management")
+app.add_typer(hook_app, name="hook")
+
+
+@hook_app.command("list")
+def hook_list(
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """List all configured hooks."""
+    from clawteam.config import load_config
+
+    cfg = load_config()
+    hooks = cfg.hooks
+
+    def _human() -> None:
+        if not hooks:
+            console.print("[dim]No hooks configured.[/dim]")
+            return
+        for i, h in enumerate(hooks, 1):
+            status = "[green]enabled[/green]" if h.enabled else "[red]disabled[/red]"
+            console.print(f"  {i}. [bold]{h.event}[/bold] → {h.action}: {h.command}  ({status})")
+
+    def _json() -> None:
+        import json as _json
+        console.print(_json.dumps([h.model_dump() for h in hooks], indent=2))
+
+    (_json if as_json else _human)()
+
+
+@hook_app.command("add")
+def hook_add(
+    event: str = typer.Option(..., "--event", "-e", help="Event type (e.g. WorkerExit)"),
+    action: str = typer.Option("shell", "--action", "-a", help="shell or python"),
+    command: str = typer.Option(..., "--command", "-c", help="Shell command or Python dotted path"),
+    priority: int = typer.Option(0, "--priority", "-p"),
+) -> None:
+    """Add a new event hook to config."""
+    from clawteam.config import HookDef, load_config, save_config
+
+    cfg = load_config()
+    hook = HookDef(event=event, action=action, command=command, priority=priority)
+    cfg.hooks.append(hook)
+    save_config(cfg)
+    console.print(f"[green]Hook added:[/green] {event} → {action}: {command}")
+
+
+@hook_app.command("remove")
+def hook_remove(
+    event: str = typer.Option(..., "--event", "-e"),
+    command: str = typer.Option("", "--command", "-c", help="Remove specific command (or all for event)"),
+) -> None:
+    """Remove hook(s) from config."""
+    from clawteam.config import load_config, save_config
+
+    cfg = load_config()
+    before = len(cfg.hooks)
+    if command:
+        cfg.hooks = [h for h in cfg.hooks if not (h.event == event and h.command == command)]
+    else:
+        cfg.hooks = [h for h in cfg.hooks if h.event != event]
+    removed = before - len(cfg.hooks)
+    save_config(cfg)
+    console.print(f"[green]Removed {removed} hook(s) for {event}[/green]")
+
+
+@hook_app.command("test")
+def hook_test(
+    event: str = typer.Option(..., "--event", "-e", help="Event type to emit"),
+    team: str = typer.Option("test", "--team", "-t"),
+    agent: str = typer.Option("test-agent", "--agent", "-n"),
+) -> None:
+    """Emit a synthetic event to test hooks."""
+    from clawteam.events.global_bus import get_event_bus
+    from clawteam.events.hooks import _resolve_event_type
+
+    event_cls = _resolve_event_type(event)
+    if event_cls is None:
+        console.print(f"[red]Unknown event type: {event}[/red]")
+        raise typer.Exit(1)
+
+    bus = get_event_bus()
+    kwargs: dict = {"team_name": team}
+    if hasattr(event_cls, "agent_name"):
+        kwargs["agent_name"] = agent
+    evt = event_cls(**kwargs)
+    results = bus.emit(evt)
+    console.print(f"[green]Emitted {event}[/green] → {len(results)} handler(s) executed")
+
+
+# ── Plugin management ──────────────────────────────────────────────────
+
+plugin_app = typer.Typer(help="Plugin management")
+app.add_typer(plugin_app, name="plugin")
+
+
+@plugin_app.command("list")
+def plugin_list(
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """List installed plugins."""
+    from clawteam.plugins.manager import PluginManager
+
+    mgr = PluginManager()
+    plugins = mgr.discover()
+
+    def _human() -> None:
+        if not plugins:
+            console.print("[dim]No plugins found.[/dim]")
+            return
+        for name, info in plugins.items():
+            console.print(f"  [bold]{name}[/bold] v{info.get('version', '?')} — {info.get('description', '')}")
+
+    def _json() -> None:
+        import json as _json
+        console.print(_json.dumps(plugins, indent=2))
+
+    (_json if as_json else _human)()
+
+
+@plugin_app.command("info")
+def plugin_info(name: str = typer.Argument(..., help="Plugin name")) -> None:
+    """Show details for a specific plugin."""
+    from clawteam.plugins.manager import PluginManager
+
+    mgr = PluginManager()
+    info = mgr.get_info(name)
+    if info is None:
+        console.print(f"[red]Plugin not found: {name}[/red]")
+        raise typer.Exit(1)
+    for key, value in info.items():
+        console.print(f"  [bold]{key}:[/bold] {value}")
+
+
+# ── Harness commands ───────────────────────────────────────────────────
+
+harness_app = typer.Typer(help="Plan-then-execute harness orchestration")
+app.add_typer(harness_app, name="harness")
+
+
+@harness_app.command("start")
+def harness_start(
+    goal: str = typer.Option(..., "--goal", "-g", help="What to build"),
+    team: str = typer.Option("default", "--team", "-t"),
+    cli: str = typer.Option("claude", "--cli", "-c", help="Underlying CLI agent"),
+    agents: int = typer.Option(3, "--agents", "-n", help="Number of executor agents"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Start a new harness run with plan-then-execute workflow."""
+    from clawteam.harness.orchestrator import HarnessOrchestrator
+
+    orch = HarnessOrchestrator(
+        team_name=team, goal=goal, cli=cli, agent_count=agents,
+    )
+    harness_id = orch.start()
+
+    def _human() -> None:
+        console.print(f"[green]Harness started:[/green] {harness_id}")
+        console.print(f"  Team: {team}")
+        console.print(f"  Goal: {goal}")
+        console.print(f"  Phase: {orch.state.current_phase.value}")
+        console.print(f"\nAdvance: clawteam harness advance {team}")
+
+    _output({"harness_id": harness_id, "team": team, "phase": orch.state.current_phase.value}, _human)
+
+
+@harness_app.command("status")
+def harness_status(
+    team: str = typer.Argument(..., help="Team name"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Show current harness status."""
+    from clawteam.harness.orchestrator import HarnessOrchestrator
+
+    orch = HarnessOrchestrator.find_latest(team)
+    if orch is None:
+        console.print(f"[red]No harness run found for team '{team}'[/red]")
+        raise typer.Exit(1)
+
+    info = orch.status()
+
+    def _human() -> None:
+        console.print(f"[bold]Harness:[/bold] {info['harness_id']}")
+        console.print(f"[bold]Phase:[/bold]   {info['phase']}")
+        adv = "[green]yes[/green]" if info["can_advance"] else f"[red]no[/red] — {info['gate_reason']}"
+        console.print(f"[bold]Advance:[/bold] {adv}")
+        if info["artifacts"]:
+            console.print(f"[bold]Artifacts:[/bold] {', '.join(info['artifacts'])}")
+
+    _output(info, _human)
+
+
+@harness_app.command("advance")
+def harness_advance(
+    team: str = typer.Argument(..., help="Team name"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Advance the harness to the next phase."""
+    from clawteam.harness.orchestrator import HarnessOrchestrator
+
+    orch = HarnessOrchestrator.find_latest(team)
+    if orch is None:
+        console.print(f"[red]No harness run found for team '{team}'[/red]")
+        raise typer.Exit(1)
+
+    new_phase = orch.advance()
+    if new_phase is None:
+        ok, reason = orch.runner.can_advance()
+        console.print(f"[yellow]Cannot advance:[/yellow] {reason or 'already at final phase'}")
+        raise typer.Exit(1)
+
+    _output(
+        {"phase": new_phase.value, "harness_id": orch.state.harness_id},
+        lambda: console.print(f"[green]Advanced to phase:[/green] {new_phase.value}"),
+    )
+
+
+@harness_app.command("contracts")
+def harness_contracts(
+    team: str = typer.Argument(..., help="Team name"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """List sprint contracts for the current harness run."""
+    from clawteam.harness.orchestrator import HarnessOrchestrator
+
+    orch = HarnessOrchestrator.find_latest(team)
+    if orch is None:
+        console.print(f"[red]No harness run found for team '{team}'[/red]")
+        raise typer.Exit(1)
+
+    artifacts = orch.artifacts.list_artifacts()
+    contracts = [a for a in artifacts if "sprint-contract" in a["name"]]
+
+    def _human() -> None:
+        if not contracts:
+            console.print("[dim]No sprint contracts yet.[/dim]")
+            return
+        for c in contracts:
+            console.print(f"  {c['name']} ({c['size']} bytes)")
+
+    _output(contracts, _human)
+
+
+@harness_app.command("abort")
+def harness_abort(
+    team: str = typer.Argument(..., help="Team name"),
+) -> None:
+    """Abort the current harness run."""
+    from clawteam.harness.orchestrator import HarnessOrchestrator
+
+    orch = HarnessOrchestrator.find_latest(team)
+    if orch is None:
+        console.print(f"[red]No harness run found for team '{team}'[/red]")
+        raise typer.Exit(1)
+
+    orch.abort()
+    console.print(f"[yellow]Harness aborted:[/yellow] {orch.state.harness_id}")
+
+
+@harness_app.command("approve")
+def harness_approve(
+    team: str = typer.Argument(..., help="Team name"),
+) -> None:
+    """Approve the current phase for advancement (human-in-the-loop gate)."""
+    import json as _json
+
+    from clawteam.harness.orchestrator import HarnessOrchestrator
+
+    orch = HarnessOrchestrator.find_latest(team)
+    if orch is None:
+        console.print(f"[red]No harness run found for team '{team}'[/red]")
+        raise typer.Exit(1)
+
+    phase = orch.state.current_phase
+    artifact_name = f"approval-{phase}.json"
+    orch.artifacts.write(artifact_name, _json.dumps({"approved": True, "phase": phase}))
+    orch.register_artifact(artifact_name, str(artifact_name))
+    console.print(f"[green]Approved phase:[/green] {phase}")
+
+
+@harness_app.command("conduct")
+def harness_conduct(
+    team: str = typer.Argument(..., help="Team name"),
+    goal: str = typer.Option(..., "--goal", "-g", help="What to build"),
+    cli: str = typer.Option("claude", "--cli", "-c", help="Underlying CLI agent"),
+    agents: int = typer.Option(3, "--agents", "-n", help="Number of executor agents"),
+    poll: float = typer.Option(5.0, "--poll", help="Poll interval in seconds"),
+) -> None:
+    """Run the full harness automatically (plan -> execute -> verify -> ship).
+
+    This starts a conductor loop that drives the harness through phases.
+    Press Ctrl+C to stop gracefully.
+    """
+    from clawteam.harness.conductor import HarnessConductor
+    from clawteam.harness.orchestrator import HarnessOrchestrator
+    from clawteam.harness.spawner import PhaseRoleSpawner
+
+    orch = HarnessOrchestrator(
+        team_name=team, goal=goal, cli=cli, agent_count=agents,
+    )
+    orch.start()
+
+    spawner = PhaseRoleSpawner(cli=cli)
+    conductor = HarnessConductor(
+        orchestrator=orch,
+        spawn_strategy=spawner,
+        poll_interval=poll,
+    )
+
+    # Load plugins with full context
+    try:
+        from clawteam.plugins.manager import PluginManager
+        ctx = conductor.build_context()
+        mgr = PluginManager()
+        mgr._build_context = lambda: ctx  # inject conductor's context
+        mgr.load_all_from_config()
+    except Exception:
+        pass
+
+    console.print(f"[green]Harness started:[/green] {orch.state.harness_id}")
+    console.print(f"  Goal: {goal}")
+    console.print(f"  CLI: {cli}, Agents: {agents}")
+    console.print(f"  Phases: {' → '.join(orch.state.phases)}")
+    console.print()
+
+    conductor.run()
+
+
+# ── Wrap / Run commands ────────────────────────────────────────────────
+
+
+@app.command("run")
+def run_command(
+    cli: str = typer.Argument(..., help="CLI agent to wrap (claude, codex, gemini, ...)"),
+    goal: str = typer.Argument("", help="Task description"),
+    team: str = typer.Option("default", "--team", "-t"),
+    profile: str = typer.Option("", "--profile", "-P", help="Agent profile name"),
+    workspace: bool = typer.Option(False, "--workspace", "-w", help="Create isolated workspace"),
+    skill: list[str] = typer.Option([], "--skill", "-s", help="Skills to inject"),
+    resume: bool = typer.Option(False, "--resume", help="Resume previous session"),
+    keepalive: bool = typer.Option(False, "--keepalive/--no-keepalive", help="Keep resumable interactive agents attached and auto-resume after clean exit"),
+) -> None:
+    """Wrap a CLI agent with ClawTeam lifecycle management.
+
+    Example: clawteam run claude "Fix the login bug"
+    """
+    import uuid as _uuid
+
+    from clawteam.harness.prompts import build_harness_system_prompt, build_wrapped_prompt
+    from clawteam.spawn import get_backend
+    from clawteam.spawn.session_capture import build_resume_command as build_cli_resume_command
+    from clawteam.team.manager import TeamManager
+
+    mgr = TeamManager
+    existing_team = mgr.get_team(team)
+    existing_leader = None
+    if existing_team and resume:
+        existing_leader = next(
+            (member for member in existing_team.members if member.agent_id == existing_team.lead_agent_id),
+            existing_team.members[0] if existing_team.members else None,
+        )
+
+    if existing_leader is not None:
+        agent_name = existing_leader.name
+        agent_id = existing_leader.agent_id
+    else:
+        agent_name = f"{cli}-{_uuid.uuid4().hex[:6]}"
+        agent_id = _uuid.uuid4().hex[:12]
+
+    if existing_team is None:
+        mgr.create_team(
+            name=team,
+            leader_name=agent_name,
+            leader_id=agent_id,
+            leader_agent_type=cli,
+        )
+    elif existing_leader is None:
+        mgr.add_member(team, agent_name, agent_id=agent_id, agent_type=cli)
+
+    # Optional workspace
+    cwd = None
+    if workspace:
+        try:
+            from clawteam.workspace import get_workspace_manager
+            ws_mgr = get_workspace_manager()
+            if ws_mgr:
+                info = ws_mgr.create_workspace(team, agent_name)
+                cwd = info.worktree_path
+        except Exception:
+            pass
+
+    # Build prompts
+    prompt = build_wrapped_prompt(agent_name=agent_name, goal=goal, team=team)
+    system_prompt = build_harness_system_prompt(team=team, agent_name=agent_name)
+
+    # Load skills
+    if skill:
+        skill_parts: list[str] = []
+        for skill_name in skill:
+            content = _load_skill_content(skill_name)
+            if content:
+                skill_parts.append(content)
+        if skill_parts:
+            system_prompt = system_prompt + "\n\n" + "\n\n".join(skill_parts)
+
+    # Resolve profile env
+    profile_env = None
+    if profile:
+        from clawteam.spawn.profiles import resolve_profile_env
+        profile_env = resolve_profile_env(profile, cli)
+
+    # Spawn
+    from clawteam.config import load_config
+    cfg = load_config()
+    backend = get_backend(cfg.default_backend or "tmux")
+
+    command_list = [cli]
+    if resume:
+        from clawteam.spawn.sessions import SessionStore
+
+        session = SessionStore(team).load(agent_name)
+        if session and session.session_id:
+            client = str((getattr(session, "state", None) or {}).get("client") or "")
+            resumed_command = build_cli_resume_command(command_list, session.session_id, client=client)
+            if resumed_command != command_list:
+                command_list = resumed_command
+            console.print(f"[dim]Resuming session: {session.session_id}[/dim]")
+            if prompt:
+                prompt += "\nYou are resuming a previous session."
+
+    result = backend.spawn(
+        command=command_list,
+        agent_name=agent_name,
+        agent_id=agent_id,
+        agent_type=cli,
+        team_name=team,
+        prompt=prompt or None,
+        env=profile_env,
+        cwd=cwd,
+        skip_permissions=cfg.skip_permissions,
+        system_prompt=system_prompt,
+        keepalive=keepalive,
+    )
+
+    if result.startswith("Error"):
+        console.print(f"[red]{result}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[green]{result}[/green]")
+    console.print(f"[bold]Attach:[/bold] tmux attach -t clawteam-{team}")
 
 
 if __name__ == "__main__":

@@ -78,6 +78,14 @@ class LifecycleManager:
             last_task=last_task or None,
             status=task_status or None,
         )
+        try:
+            from clawteam.events.global_bus import get_event_bus
+            from clawteam.events.types import AgentIdle
+            get_event_bus().emit_async(AgentIdle(
+                team_name=self.team_name, agent_name=agent_name, last_task=last_task,
+            ))
+        except Exception:
+            pass
 
     @staticmethod
     def cleanup_team(team_name: str) -> bool:
@@ -100,4 +108,11 @@ class LifecycleManager:
             if d.exists():
                 shutil.rmtree(d)
                 cleaned = True
+        if cleaned:
+            try:
+                from clawteam.events.global_bus import get_event_bus
+                from clawteam.events.types import TeamShutdown
+                get_event_bus().emit_async(TeamShutdown(team_name=team_name))
+            except Exception:
+                pass
         return cleaned

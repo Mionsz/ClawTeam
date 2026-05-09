@@ -51,6 +51,11 @@ class TeamManager:
     """Manages team lifecycle operations."""
 
     @staticmethod
+    def team_exists(team_name: str) -> bool:
+        """Return True when a team config exists."""
+        return _load_config(team_name) is not None
+
+    @staticmethod
     def get_member(
         team_name: str,
         member_name: str,

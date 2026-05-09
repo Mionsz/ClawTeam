@@ -16,15 +16,15 @@ from clawteam.spawn.adapters import (
     is_claude_command,
     is_codex_command,
     is_gemini_command,
-    is_kimi_command,
-    is_nanobot_command,
-    is_opencode_command,
-    is_qwen_command,
 )
 from clawteam.spawn.base import SpawnBackend
 from clawteam.spawn.cli_env import build_spawn_path, resolve_clawteam_executable
 from clawteam.spawn.command_validation import validate_spawn_command
+from clawteam.spawn.keepalive import build_keepalive_shell_command, build_resume_command
+from clawteam.spawn.runtime_notification import render_runtime_notification
+from clawteam.spawn.session_capture import persist_spawned_session, prepare_session_capture
 from clawteam.spawn.wsh_rpc import WshRpcClient
+from clawteam.team.models import get_data_dir
 
 
 def _validate_path(path: str) -> str | None:
@@ -228,6 +228,8 @@ class WshBackend(SpawnBackend):
         cwd: str | None = None,
         skip_permissions: bool = False,
         system_prompt: str | None = None,
+        is_leader: bool = False,
+        keepalive: bool = False,
     ) -> str:
         """Spawn a new agent in a TideTerm block."""
         wsh_bin = _find_wsh()
@@ -241,13 +243,14 @@ class WshBackend(SpawnBackend):
 
         clawteam_bin = resolve_clawteam_executable()
         env_vars = os.environ.copy()
+        env_vars.setdefault("CLAWTEAM_DATA_DIR", str(get_data_dir()))
         env_vars.update(
             {
                 "CLAWTEAM_AGENT_ID": agent_id,
                 "CLAWTEAM_AGENT_NAME": agent_name,
                 "CLAWTEAM_AGENT_TYPE": agent_type,
                 "CLAWTEAM_TEAM_NAME": team_name,
-                "CLAWTEAM_AGENT_LEADER": "0",
+                "CLAWTEAM_AGENT_LEADER": "1" if is_leader else "0",
             }
         )
         if cwd:
@@ -256,18 +259,25 @@ class WshBackend(SpawnBackend):
             env_vars.update(env)
         env_vars["PATH"] = build_spawn_path(env_vars.get("PATH", os.environ.get("PATH")))
 
-        prepared = self._adapter.prepare_command(
+        session_capture = prepare_session_capture(
             command,
+            team_name=team_name,
+            agent_name=agent_name,
+            cwd=cwd,
+            prompt=prompt,
+        )
+        prepared = self._adapter.prepare_command(
+            session_capture.command,
             prompt=None,
             cwd=cwd,
             skip_permissions=skip_permissions,
             agent_name=agent_name,
             interactive=True,
+            container_env=env_vars,
         )
         normalized_command = prepared.normalized_command
         validation_command = normalized_command
         final_command = list(prepared.final_command)
-        post_launch_prompt = None
 
         if prompt and is_claude_command(normalized_command):
             final_command.append(prompt)
@@ -278,6 +288,24 @@ class WshBackend(SpawnBackend):
             else:
                 insert_at = 1
             final_command[insert_at:insert_at] = ["--append-system-prompt", system_prompt]
+        resume_base = build_resume_command(normalized_command)
+        resume_command: list[str] = []
+        if resume_base:
+            resume_prepared = self._adapter.prepare_command(
+                resume_base,
+                cwd=cwd,
+                skip_permissions=skip_permissions,
+                agent_name=agent_name,
+                interactive=True,
+                container_env=env_vars,
+            )
+            resume_command = list(resume_prepared.final_command)
+            if system_prompt and is_claude_command(resume_prepared.normalized_command):
+                if "-p" in resume_command:
+                    insert_at = resume_command.index("-p") + 2
+                else:
+                    insert_at = 1
+                resume_command[insert_at:insert_at] = ["--append-system-prompt", system_prompt]
 
         command_error = validate_spawn_command(
             validation_command, path=env_vars.get("PATH", ""), cwd=cwd
@@ -285,21 +313,23 @@ class WshBackend(SpawnBackend):
         if command_error:
             return command_error
 
-        cmd_str = " ".join(shlex.quote(c) for c in final_command)
-        exit_cmd = shlex.quote(clawteam_bin) if os.path.isabs(clawteam_bin) else "clawteam"
-        exit_hook = (
-            f"{exit_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
-            f"--agent {shlex.quote(agent_name)}"
+        wrapped_cmd = build_keepalive_shell_command(
+            final_command,
+            resume_command=resume_command,
+            clawteam_bin=clawteam_bin if os.path.isabs(clawteam_bin) else "clawteam",
+            team_name=team_name,
+            agent_name=agent_name,
+            keepalive=keepalive,
         )
 
-        _SHELL_ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-        export_vars = {k: v for k, v in env_vars.items() if _SHELL_ENV_KEY_RE.fullmatch(k)}
+        shell_env_key_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+        export_vars = {k: v for k, v in env_vars.items() if shell_env_key_re.fullmatch(k)}
         export_prefix = " ".join(f"export {k}={shlex.quote(v)}" for k, v in export_vars.items())
 
         if cwd:
-            full_cmd = f"{export_prefix}; cd {shlex.quote(cwd)} && {cmd_str}; {exit_hook}"
+            full_cmd = f"{export_prefix}; cd {shlex.quote(cwd)} && {wrapped_cmd}"
         else:
-            full_cmd = f"{export_prefix}; {cmd_str}; {exit_hook}"
+            full_cmd = f"{export_prefix}; {wrapped_cmd}"
 
         result = subprocess.run(
             [wsh_bin, "run", "-X", "-c", full_cmd, "--cwd", cwd if cwd else "."],
@@ -358,6 +388,12 @@ class WshBackend(SpawnBackend):
             pid=pane_pid,
             command=list(final_command),
         )
+        persist_spawned_session(
+            session_capture,
+            team_name=team_name,
+            agent_name=agent_name,
+            command=list(final_command),
+        )
 
         return f"Agent '{agent_name}' spawned in wsh block ({block_id})"
 
@@ -367,6 +403,27 @@ class WshBackend(SpawnBackend):
             {"name": name, "target": target, "backend": "wsh"}
             for name, target in self._blocks.items()
         ]
+
+    def inject_runtime_message(self, team: str, agent_name: str, envelope) -> tuple[bool, str]:
+        """Best-effort runtime injection into a running wsh block."""
+        from clawteam.spawn.registry import get_registry
+
+        info = get_registry(team).get(agent_name, {})
+        block_id = info.get("block_id", "") or self._blocks.get(agent_name, "")
+        if not block_id:
+            return False, f"wsh block for '{team}/{agent_name}' not found"
+        if not _is_block_alive(block_id):
+            return False, f"wsh block '{block_id}' is not alive"
+
+        if self._rpc_client is None:
+            self._rpc_client = WshRpcClient()
+        payload = render_runtime_notification(envelope)
+        if not self._rpc_client.send_input(block_id, payload):
+            return False, f"runtime injection failed for wsh block '{block_id}'"
+        if not self._rpc_client.send_input(block_id, ""):
+            return False, f"runtime submit failed for wsh block '{block_id}'"
+
+        return True, f"Injected runtime notification into wsh block {block_id}"
 
     def _confirm_workspace_trust_if_prompted(
         self,
