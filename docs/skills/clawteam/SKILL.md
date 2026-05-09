@@ -1,5 +1,5 @@
 ---
-name: ClawTeam
+name: clawteam
 description: >
   This skill should be used when the user asks to "create a team", "spawn agents",
   "assign tasks", "coordinate multiple agents", "check team status", "view kanban board",
@@ -13,7 +13,6 @@ description: >
   single agent can efficiently handle alone. Provides comprehensive guidance for
   using the ClawTeam CLI to orchestrate multi-agent teams with task management,
   messaging, monitoring, runtime profiles, git context, and recovery tooling.
-version: 0.3.1
 ---
 
 # ClawTeam Multi-Agent Coordination

@@ -54,7 +54,9 @@ class NativeCliAdapter:
             if is_claude_command(normalized_command) and not _is_root:
                 final_command.append("--dangerously-skip-permissions")
             elif is_codex_command(normalized_command):
-                final_command.append("--dangerously-bypass-approvals-and-sandbox")
+                # codex-auto already includes auto-approve flags
+                if command_basename(normalized_command) != "codex-auto":
+                    final_command.append("--dangerously-auto-approve-everything")
             elif (
                 is_gemini_command(normalized_command)
                 or is_kimi_command(normalized_command)
@@ -122,6 +124,15 @@ class NativeCliAdapter:
                     final_command.append(prompt)
                 else:
                     final_command.extend(["-p", prompt])
+        elif is_hermes_command(normalized_command):
+            # hermes uses --yolo for auto-approve and -z for one-shot prompt
+            # Always add --yolo and --accept-hooks to prevent interactive stalls
+            if "--yolo" not in final_command:
+                final_command.append("--yolo")
+            if "--accept-hooks" not in final_command:
+                final_command.append("--accept-hooks")
+            if prompt:
+                final_command.extend(["-z", prompt])
         elif is_gemini_command(normalized_command):
             if prompt:
                 if interactive:
@@ -160,7 +171,7 @@ def is_claude_command(command: list[str]) -> bool:
 
 def is_codex_command(command: list[str]) -> bool:
     """Check if the command is a Codex CLI invocation."""
-    return command_basename(command) in ("codex", "codex-cli")
+    return command_basename(command) in ("codex", "codex-cli", "codex-auto")
 
 
 def _is_codex_noninteractive_command(command: list[str]) -> bool:
@@ -222,6 +233,11 @@ def is_pi_command(command: list[str]) -> bool:
     return command_basename(command) == "pi"
 
 
+def is_hermes_command(command: list[str]) -> bool:
+    """Check if the command is a Hermes Agent CLI invocation."""
+    return command_basename(command) == "hermes"
+
+
 def is_interactive_cli(command: list[str]) -> bool:
     """Check if the command is a known interactive AI coding CLI."""
     return (
@@ -234,4 +250,5 @@ def is_interactive_cli(command: list[str]) -> bool:
         or is_opencode_command(command)
         or is_openclaw_command(command)
         or is_pi_command(command)
+        or is_hermes_command(command)
     )

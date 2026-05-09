@@ -3106,6 +3106,7 @@ def spawn_agent(
     replace: bool = typer.Option(False, "--replace", help="Replace a running agent with the same name"),
     keepalive: bool = typer.Option(True, "--keepalive/--no-keepalive", help="Keep resumable interactive agents attached and auto-resume after clean exit"),
     skill: Optional[list[str]] = typer.Option(None, "--skill", help="Skill name(s) to inject into the agent's system prompt (repeatable, claude only)"),
+    role: Optional[str] = typer.Option(None, "--role", help="Role hint (e.g. orchestrator, tdd-writer, coder, manage). Auto-attaches default skills, surfaces required reading, and pins cwd to repo root for orchestrator-class roles."),
 ):
     """Spawn a new agent process with identity + task as its initial prompt.
 
@@ -3118,6 +3119,19 @@ def spawn_agent(
     from clawteam.config import get_effective
     from clawteam.spawn import get_backend
     from clawteam.spawn.profiles import apply_profile, load_profile, resolve_profile_name
+    from clawteam.spawn.role_defaults import resolve_role, merged_skill_list
+    from clawteam.spawn.skills_link import ensure_skills_symlinked
+
+    role_profile = resolve_role(role)
+    # Merge role-default skills with user-specified skills (only when a role
+    # was explicitly given; passing no role preserves legacy spawn behaviour).
+    if role:
+        skill = merged_skill_list(role_profile, list(skill) if skill else None) or None
+
+    # Orchestrator-class roles must run from the repo root so they inherit
+    # AGENTS.md / .github discovery; force-disable the worktree.
+    if role_profile.prefer_root_cwd and workspace is None:
+        workspace = False
 
     # Resolve defaults from config
     if backend is None:
@@ -3202,6 +3216,32 @@ def spawn_agent(
         import os as _os_repo
         cwd = _os_repo.path.abspath(repo)
 
+    # Resolve repo_root for required-reading absolute paths and skill symlinks.
+    repo_root_path: Optional[str] = None
+    try:
+        from pathlib import Path as _PathRR
+        candidate = repo or os.getcwd()
+        candidate_path = _PathRR(candidate).resolve()
+        # Walk up looking for AGENTS.md (root governance file).
+        for parent in [candidate_path, *candidate_path.parents]:
+            if (parent / "AGENTS.md").exists():
+                repo_root_path = str(parent)
+                break
+    except Exception:
+        repo_root_path = None
+
+    # If orchestrator/manager role wants root cwd, override now.
+    if role_profile.prefer_root_cwd and repo_root_path:
+        cwd = repo_root_path
+        ws_branch = ""
+
+    # Idempotently symlink repo skills into ~/.claude/skills/ so --skill works.
+    if repo_root_path:
+        try:
+            ensure_skills_symlinked(repo_root_path)
+        except Exception:
+            pass
+
     profile_env: dict[str, str] = {}
     if profile:
         try:
@@ -3262,8 +3302,10 @@ def spawn_agent(
             user=user_name,
             workspace_dir=cwd or "",
             workspace_branch=ws_branch,
-            isolated_workspace=bool(workspace and cwd),
+            isolated_workspace=bool(workspace and cwd) and not role_profile.prefer_root_cwd,
             repo_path=repo,
+            role=role,
+            repo_root=repo_root_path,
         )
 
     # Session resume: inject the native client resume flag.
