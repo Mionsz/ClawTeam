@@ -3262,7 +3262,7 @@ def spawn_agent(
     from clawteam.config import get_effective
     from clawteam.spawn import get_backend
     from clawteam.spawn.profiles import apply_profile, load_profile, resolve_profile_name
-    from clawteam.spawn.role_defaults import resolve_role, merged_skill_list
+    from clawteam.spawn.role_defaults import merged_skill_list, resolve_role
     from clawteam.spawn.skills_link import ensure_skills_symlinked
 
     role_profile = resolve_role(role)

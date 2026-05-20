@@ -1687,7 +1687,7 @@ def test_subprocess_backend_qwen_skip_permissions_and_prompt(monkeypatch, tmp_pa
         skip_permissions=True,
     )
 
-    assert "qwen --dangerously-skip-permissions -p 'refactor this'" in captured["cmd"]
+    assert "qwen --yolo -p 'refactor this'" in captured["cmd"]
 
 
 def test_subprocess_backend_opencode_skip_permissions_and_prompt(monkeypatch, tmp_path):

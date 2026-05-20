@@ -130,7 +130,8 @@ class P2PTransport(Transport):
         """Write peers/{agent}.json with host/port/pid plus lease metadata."""
         if not self._bind_agent or self._port is None:
             return
-        peer_file = _peers_dir(self.team_name) / f"{self._bind_agent}.json"atomic_write_text(peer_file, json.dumps(self._peer_info()))
+        peer_file = _peers_dir(self.team_name) / f"{self._bind_agent}.json"
+        atomic_write_text(peer_file, json.dumps(self._peer_info()))
 
 
     def _deregister_peer(self) -> None:

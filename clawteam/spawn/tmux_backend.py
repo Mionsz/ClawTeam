@@ -10,18 +10,13 @@ import subprocess
 import tempfile
 import time
 import uuid
-from xml.sax.saxutils import escape
 
 from clawteam.spawn.adapters import (
     NativeCliAdapter,
     is_claude_command,
     is_codex_command,
     is_gemini_command,
-    is_kimi_command,
-    is_nanobot_command,
-    is_opencode_command,
     is_pi_command,
-    is_qwen_command,
 )
 from clawteam.spawn.base import SpawnBackend
 from clawteam.spawn.cli_env import build_spawn_path, resolve_clawteam_executable
@@ -135,16 +130,6 @@ class TmuxBackend(SpawnBackend):
         command_error = validate_spawn_command(validation_command, path=env_vars["PATH"], cwd=cwd)
         if command_error:
             return command_error
-
-        # Build the command (without prompt — we'll send it via send-keys)
-        final_command = list(command)
-        if skip_permissions:
-            if _is_claude_command(command):
-                final_command.append("--dangerously-skip-permissions")
-            elif _is_codex_command(command):
-                final_command.append("--dangerously-bypass-approvals-and-sandbox")
-        if system_prompt and _is_claude_command(command):
-            final_command.extend(["--append-system-prompt", system_prompt])
 
         # tmux launches the command through a shell, so only shell-safe
         # environment names can be exported. The current host environment on
@@ -314,8 +299,7 @@ class TmuxBackend(SpawnBackend):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            os.unlink(tmp_path)
-        elif prompt and not _is_codex_command(command):
+        elif prompt and not is_codex_command(command):
             # Non-claude/non-codex command: append prompt via send-keys
             _wait_for_tui_ready(target, timeout=cfg.spawn_ready_timeout, fallback_delay=cfg.spawn_prompt_delay)
             subprocess.run(
@@ -517,6 +501,44 @@ def _confirm_workspace_trust_if_prompted(
     any prompt injection so the interactive TUI remains intact.
     """
     if not (is_claude_command(command) or is_codex_command(command) or is_gemini_command(command)):
+        return False
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        pane = subprocess.run(
+            ["tmux", "capture-pane", "-p", "-t", target],
+            capture_output=True,
+            text=True,
+        )
+        pane_text = pane.stdout.lower() if pane.returncode == 0 else ""
+        action = _startup_prompt_action(command, pane_text)
+        if action == "enter":
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, "Enter"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            time.sleep(0.5)
+            return True
+        if action == "down-enter":
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, "-l", "\x1b[B"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            time.sleep(0.2)
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, "Enter"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            time.sleep(0.5)
+            return True
+
+        time.sleep(poll_interval_seconds)
+
+    return False
+
 
 def _wait_for_tui_ready(
     target: str,
@@ -567,48 +589,6 @@ def _wait_for_tui_ready(
 
     # Timeout reached — fall back to fixed delay so prompt is still sent
     time.sleep(fallback_delay)
-
-
-def _is_claude_command(command: list[str]) -> bool:
-    """Check if the command is a claude CLI invocation."""
-    if not command:
-        return False
-
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        pane = subprocess.run(
-            ["tmux", "capture-pane", "-p", "-t", target],
-            capture_output=True,
-            text=True,
-        )
-        pane_text = pane.stdout.lower() if pane.returncode == 0 else ""
-        action = _startup_prompt_action(command, pane_text)
-        if action == "enter":
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "Enter"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            time.sleep(0.5)
-            return True
-        if action == "down-enter":
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "-l", "\x1b[B"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            time.sleep(0.2)
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "Enter"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            time.sleep(0.5)
-            return True
-
-        time.sleep(poll_interval_seconds)
-
-    return False
 
 
 def _startup_prompt_action(command: list[str], pane_text: str) -> str | None:

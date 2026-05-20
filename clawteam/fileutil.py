@@ -12,12 +12,17 @@ spawn registries, etc.).
 
 from __future__ import annotations
 
-import fcntl
 import os
+import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 
 def atomic_write_text(
@@ -59,8 +64,17 @@ def file_locked(path: Path) -> Iterator[None]:
     lock_path = Path(str(path) + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as fh:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        if sys.platform == "win32":
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)

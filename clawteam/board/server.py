@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 from clawteam.board.collector import BoardCollector
 
@@ -144,8 +145,8 @@ class BoardHandler(BaseHTTPRequestHandler):
                 return
             self._serve_sse(team_name)
         elif path.startswith("/api/proxy"):
-            from urllib.parse import urlparse, parse_qs
             import urllib.request
+            from urllib.parse import parse_qs, urlparse
             query = parse_qs(urlparse(self.path).query)
             target_url = query.get("url", [""])[0]
             if not target_url:
@@ -165,7 +166,7 @@ class BoardHandler(BaseHTTPRequestHandler):
                             target_url = data.get("download_url", target_url)
                     else:
                         target_url = target_url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
-                
+
                 req = urllib.request.Request(target_url, headers={"User-Agent": "ClawTeam-Server"})
                 with urllib.request.urlopen(req) as resp:
                     content = resp.read()
@@ -203,8 +204,8 @@ class BoardHandler(BaseHTTPRequestHandler):
                 body = self.rfile.read(content_length).decode("utf-8")
                 try:
                     payload = json.loads(body)
-                    from clawteam.team.tasks import TaskStore
                     from clawteam.team.models import TaskPriority
+                    from clawteam.team.tasks import TaskStore
                     store = TaskStore(team_name)
                     priority_val = payload.get("priority")
                     task = store.create(
@@ -274,8 +275,8 @@ class BoardHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length).decode("utf-8")
             try:
                 payload = json.loads(body)
+                from clawteam.team.models import TaskPriority, TaskStatus
                 from clawteam.team.tasks import TaskStore
-                from clawteam.team.models import TaskStatus, TaskPriority
                 store = TaskStore(team_name)
                 kwargs = {}
                 if "status" in payload:
