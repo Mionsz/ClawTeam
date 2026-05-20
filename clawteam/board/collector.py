@@ -5,9 +5,27 @@ from __future__ import annotations
 import json
 
 from clawteam.board.liveness import agents_online
+from clawteam.spawn.registry import is_agent_alive
 from clawteam.team.mailbox import MailboxManager
 from clawteam.team.manager import TeamManager
 from clawteam.team.tasks import TaskStore
+
+
+def _agents_online_accurate(team_name: str, member_names: list[str]) -> dict[str, bool]:
+    """Return liveness per member using the spawn registry (accurate).
+
+    Falls back to window-name matching via ``agents_online`` for members
+    that have no registry entry (e.g. manually spawned or legacy agents).
+    """
+    fallback = agents_online(team_name, member_names)
+    result: dict[str, bool] = {}
+    for name in member_names:
+        registry_alive = is_agent_alive(team_name, name)
+        if registry_alive is not None:
+            result[name] = registry_alive
+        else:
+            result[name] = fallback.get(name, False)
+    return result
 
 
 class BoardCollector:
@@ -51,10 +69,8 @@ class BoardCollector:
             if not leader_name and member.agent_id == config.lead_agent_id:
                 leader_name = member.name
 
-        online_map = agents_online(team_name, [m.name for m in config.members])
+        online_map = _agents_online_accurate(team_name, [m.name for m in config.members])
         members_online = sum(1 for v in online_map.values() if v)
-
-        tasks_total = len(store.list_tasks())
         return {
             "name": config.name,
             "description": config.description,
@@ -78,7 +94,7 @@ class BoardCollector:
         mailbox = MailboxManager(team_name)
         store = TaskStore(team_name)
         member_aliases = self._member_alias_index(config)
-        online_map = agents_online(team_name, [m.name for m in config.members])
+        online_map = _agents_online_accurate(team_name, [m.name for m in config.members])
 
         # Members with inbox counts
         members = []

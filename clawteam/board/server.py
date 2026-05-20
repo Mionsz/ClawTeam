@@ -13,6 +13,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from clawteam.board.collector import BoardCollector
+from clawteam.paths import validate_identifier
+
+_MAX_BODY_BYTES = 65_536  # 64 KiB — guards against unbounded memory reads
+_MAX_SSE_CONNECTIONS = 64  # per-server FD limit for SSE streams
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _ALLOWED_PROXY_HOSTS = {
@@ -123,6 +127,43 @@ class BoardHandler(BaseHTTPRequestHandler):
     default_team: str = ""
     interval: float = 2.0
     team_cache: TeamSnapshotCache
+    _sse_semaphore: threading.Semaphore  # set in serve()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _read_body(self) -> bytes | None:
+        """Read the request body, capped at _MAX_BODY_BYTES.
+
+        Returns None and sends a 413 response when the declared or actual
+        body size would exceed the cap.
+        """
+        try:
+            declared = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            declared = 0
+        if declared > _MAX_BODY_BYTES:
+            self.send_error(413, "Request body too large")
+            return None
+        return self.rfile.read(min(declared, _MAX_BODY_BYTES))
+
+    def _resolve_team(self, raw: str) -> str | None:
+        """Validate and return the team name, or send 400 and return None."""
+        name = raw.strip("/")
+        if not name:
+            self.send_error(400, "Team name required")
+            return None
+        try:
+            validate_identifier(name, "team name")
+        except ValueError as exc:
+            self.send_error(400, str(exc))
+            return None
+        return name
+
+    # ------------------------------------------------------------------
+    # Request handlers
+    # ------------------------------------------------------------------
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -132,48 +173,29 @@ class BoardHandler(BaseHTTPRequestHandler):
         elif path == "/api/overview":
             self._serve_json(self.collector.collect_overview())
         elif path.startswith("/api/team/"):
-            team_name = path[len("/api/team/"):].strip("/")
-            if not team_name:
-                self.send_error(400, "Team name required")
+            team_name = self._resolve_team(path[len("/api/team/"):])
+            if team_name is None:
                 return
             self._serve_team(team_name)
         elif path.startswith("/api/events/"):
-            team_name = path[len("/api/events/"):].strip("/")
-            if not team_name:
-                self.send_error(400, "Team name required")
+            team_name = self._resolve_team(path[len("/api/events/"):])
+            if team_name is None:
                 return
             self._serve_sse(team_name)
         elif path.startswith("/api/proxy"):
-            from urllib.parse import urlparse, parse_qs
-            import urllib.request
+            from urllib.parse import parse_qs, urlparse
             query = parse_qs(urlparse(self.path).query)
             target_url = query.get("url", [""])[0]
             if not target_url:
                 self.send_error(400, "URL required")
                 return
             try:
-                # If github URL, convert to api.github.com/repos/.../readme
-                if "github.com" in target_url and "raw.githubusercontent.com" not in target_url:
-                    parsed = urlparse(target_url)
-                    parts = [p for p in parsed.path.split("/") if p]
-                    if len(parts) == 2:
-                        api_url = f"https://api.github.com/repos/{parts[0]}/{parts[1]}/readme"
-                        req = urllib.request.Request(api_url, headers={"User-Agent": "ClawTeam-Server"})
-                        with urllib.request.urlopen(req) as resp:
-                            import json
-                            data = json.loads(resp.read().decode())
-                            target_url = data.get("download_url", target_url)
-                    else:
-                        target_url = target_url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
-                
-                req = urllib.request.Request(target_url, headers={"User-Agent": "ClawTeam-Server"})
-                with urllib.request.urlopen(req) as resp:
-                    content = resp.read()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/plain; charset=utf-8")
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.end_headers()
-                    self.wfile.write(content)
+                content = _fetch_proxy_content(target_url)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(content)
             except Exception as e:
                 self.send_error(500, str(e))
         elif path.startswith("/assets/"):
@@ -198,11 +220,14 @@ class BoardHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/team/") and path.endswith("/task"):
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[3] == "task":
-                team_name = parts[2]
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8")
+                team_name = self._resolve_team(parts[2])
+                if team_name is None:
+                    return
+                raw = self._read_body()
+                if raw is None:
+                    return
                 try:
-                    payload = json.loads(body)
+                    payload = json.loads(raw)
                     from clawteam.team.tasks import TaskStore
                     from clawteam.team.models import TaskPriority
                     store = TaskStore(team_name)
@@ -221,11 +246,14 @@ class BoardHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/team/") and path.endswith("/member"):
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[3] == "member":
-                team_name = parts[2]
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8")
+                team_name = self._resolve_team(parts[2])
+                if team_name is None:
+                    return
+                raw = self._read_body()
+                if raw is None:
+                    return
                 try:
-                    payload = json.loads(body)
+                    payload = json.loads(raw)
                     from clawteam.team.manager import TeamManager
                     name = payload.get("name", "")
                     agent_type = payload.get("agentType", "general-purpose")
@@ -242,15 +270,18 @@ class BoardHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/team/") and path.endswith("/message"):
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[3] == "message":
-                team_name = parts[2]
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8")
+                team_name = self._resolve_team(parts[2])
+                if team_name is None:
+                    return
+                raw = self._read_body()
+                if raw is None:
+                    return
                 try:
-                    payload = json.loads(body)
+                    payload = json.loads(raw)
                     from clawteam.team.mailbox import MailboxManager
                     mailbox = MailboxManager(team_name)
                     mailbox.send(
-                        from_agent=payload.get("from", "board-ui"),
+                        from_agent="board-ui",
                         to=payload.get("to", ""),
                         msg_type=payload.get("type", "message"),
                         content=payload.get("content", ""),
@@ -268,12 +299,15 @@ class BoardHandler(BaseHTTPRequestHandler):
         # PATCH /api/team/<name>/task/<id>
         parts = path.strip("/").split("/")
         if len(parts) == 5 and parts[0] == "api" and parts[1] == "team" and parts[3] == "task":
-            team_name = parts[2]
+            team_name = self._resolve_team(parts[2])
+            if team_name is None:
+                return
             task_id = parts[4]
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length).decode("utf-8")
+            raw = self._read_body()
+            if raw is None:
+                return
             try:
-                payload = json.loads(body)
+                payload = json.loads(raw)
                 from clawteam.team.tasks import TaskStore
                 from clawteam.team.models import TaskStatus, TaskPriority
                 store = TaskStore(team_name)
@@ -338,27 +372,33 @@ class BoardHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _serve_sse(self, team_name: str):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
+        if not self.server._sse_semaphore.acquire(blocking=False):
+            self.send_error(503, "Too many SSE connections")
+            return
         try:
-            while True:
-                try:
-                    data = self.team_cache.get(
-                        team_name,
-                        lambda: self.collector.collect_team(team_name),
-                    )
-                except ValueError as e:
-                    data = {"error": str(e)}
-                payload = json.dumps(data, ensure_ascii=False)
-                self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
-                self.wfile.flush()
-                time.sleep(self.interval)
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            pass
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            try:
+                while True:
+                    try:
+                        data = self.team_cache.get(
+                            team_name,
+                            lambda: self.collector.collect_team(team_name),
+                        )
+                    except ValueError as e:
+                        data = {"error": str(e)}
+                    payload = json.dumps(data, ensure_ascii=False)
+                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                    time.sleep(self.interval)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+        finally:
+            self.server._sse_semaphore.release()
 
     def log_message(self, format, *args):
         # Suppress default stderr logging for SSE connections
@@ -372,6 +412,7 @@ def serve(
     port: int = 8080,
     default_team: str = "",
     interval: float = 2.0,
+    max_sse_connections: int = _MAX_SSE_CONNECTIONS,
 ):
     """Start the Web UI server."""
     collector = BoardCollector()
@@ -381,6 +422,7 @@ def serve(
     BoardHandler.team_cache = TeamSnapshotCache(ttl_seconds=interval)
 
     server = ThreadingHTTPServer((host, port), BoardHandler)
+    server._sse_semaphore = threading.Semaphore(max_sse_connections)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
