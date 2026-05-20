@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from .role_defaults import RoleProfile, resolve_role
 
-
 CLAWTEAM_TRIGGER_BLOCK = """\
 ## MANDATORY — ClawTeam Mention Trigger
 
@@ -185,9 +184,9 @@ def build_agent_prompt(
         '- Use a clear commit message, e.g. `git add -A && git commit -m "Implement <task summary>"`.',
         f"- Finishing a task: `clawteam task update {team_name} <task-id> --status completed`",
         "- When you finish all tasks, send a summary to the leader:",
-        f'  `clawteam inbox send {team_name} "{leader_inbox}" "All tasks completed. <brief summary>"`',
+        f'  `clawteam inbox send {team_name} {leader_name} "All tasks completed. <brief summary>"`',
         "- If you are blocked or need help, message the leader:",
-        f'  `clawteam inbox send {team_name} "{leader_inbox}" "Need help: <description>"`',
+        f'  `clawteam inbox send {team_name} {leader_name} "Need help: <description>"`',
         f"- After finishing work, report your costs: `clawteam cost report {team_name} --input-tokens <N> --output-tokens <N> --cost-cents <N>`",
         "- Do not exit after the first task unless the leader explicitly tells you to stop.",
         "",

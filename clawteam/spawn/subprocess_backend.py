@@ -6,7 +6,12 @@ import os
 import subprocess
 
 from clawteam.paths import ensure_within_root, validate_identifier
-from clawteam.spawn.adapters import NativeCliAdapter, is_claude_command, is_openclaw_command, is_pi_command
+from clawteam.spawn.adapters import (
+    NativeCliAdapter,
+    is_claude_command,
+    is_openclaw_command,
+    is_pi_command,
+)
 from clawteam.spawn.base import SpawnBackend
 from clawteam.spawn.cli_env import build_spawn_path, resolve_clawteam_executable
 from clawteam.spawn.command_validation import validate_spawn_command
@@ -19,7 +24,6 @@ from clawteam.spawn.runtime_notification import render_runtime_notification
 from clawteam.spawn.session_capture import persist_spawned_session, prepare_session_capture
 from clawteam.team.mailbox import MailboxManager
 from clawteam.team.models import MessageType, get_data_dir
-from clawteam.team.models import get_data_dir
 
 
 class SubprocessBackend(SpawnBackend):
@@ -128,21 +132,6 @@ class SubprocessBackend(SpawnBackend):
         command_error = validate_spawn_command(validation_command, path=spawn_env["PATH"], cwd=cwd)
         if command_error:
             return command_error
-
-        final_command = list(command)
-        if skip_permissions:
-            if _is_claude_command(command):
-                final_command.append("--dangerously-skip-permissions")
-            elif _is_codex_command(command):
-                final_command.append("--dangerously-bypass-approvals-and-sandbox")
-        if system_prompt and _is_claude_command(command):
-            final_command.extend(["--append-system-prompt", system_prompt])
-        if prompt:
-            if _is_codex_command(command):
-                # Codex accepts prompt as positional argument
-                final_command.append(prompt)
-            else:
-                final_command.extend(["-p", prompt])
 
         # Wrap with on-exit hook so task status updates immediately on exit
         import sys

@@ -37,9 +37,22 @@ def get_data_dir() -> Path:
 
 
 def _find_project_data_dir() -> Path | None:
-    """Walk up from cwd looking for a ``.clawteam/`` directory. Returns it or None."""
+    """Walk up from cwd looking for a ``.clawteam/`` directory. Returns it or None.
+
+    The walk stops once it reaches the parent of the user's home directory so
+    the global ``~/.clawteam`` fallback is not mistaken for a project marker and
+    the search does not escape into shared system locations.
+    """
     cwd = Path.cwd().resolve()
+    try:
+        boundary = Path.home().resolve().parent
+    except (RuntimeError, OSError):
+        boundary = None
     for candidate in (cwd, *cwd.parents):
+        if boundary is not None and (
+            candidate == boundary or boundary not in candidate.parents
+        ):
+            return None
         dot = candidate / ".clawteam"
         if dot.is_dir():
             return dot
