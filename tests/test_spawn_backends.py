@@ -290,6 +290,153 @@ def test_tmux_backend_uses_configured_timeout_for_workspace_trust_prompt(monkeyp
     assert captured["poll_interval_seconds"] == 0.2
 
 
+def test_tmux_backend_injects_post_launch_prompt_once_using_pane_id(monkeypatch, tmp_path):
+    from clawteam.config import ClawTeamConfig
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    clawteam_bin = tmp_path / "venv" / "bin" / "clawteam"
+    clawteam_bin.parent.mkdir(parents=True)
+    clawteam_bin.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(sys, "argv", [str(clawteam_bin)])
+
+    run_calls: list[list[str]] = []
+    injected: list[tuple[str, str, str]] = []
+
+    class Result:
+        def __init__(self, returncode: int = 0, stdout: str = ""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(args, **kwargs):
+        run_calls.append(args)
+        if args[:3] == ["tmux", "has-session", "-t"]:
+            return Result(returncode=1)
+        if args[:3] == ["tmux", "list-panes", "-t"]:
+            return Result(returncode=0, stdout="9876\n")
+        if args[:4] == ["tmux", "display-message", "-p", "-t"]:
+            return Result(returncode=0, stdout="%42\n")
+        return Result(returncode=0)
+
+    def fake_which(name, path=None):
+        if name == "tmux":
+            return "/usr/bin/tmux"
+        if name == "codex":
+            return "/usr/bin/codex"
+        return None
+
+    monkeypatch.setattr("clawteam.config.load_config", lambda: ClawTeamConfig())
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.shutil.which", fake_which)
+    monkeypatch.setattr("clawteam.spawn.command_validation.shutil.which", fake_which)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "clawteam.spawn.tmux_backend._confirm_workspace_trust_if_prompted",
+        lambda *_, **__: False,
+    )
+    monkeypatch.setattr(
+        "clawteam.spawn.tmux_backend._dismiss_codex_update_prompt_if_present",
+        lambda *_, **__: False,
+    )
+    monkeypatch.setattr(
+        "clawteam.spawn.tmux_backend._wait_for_cli_ready",
+        lambda *_, **__: True,
+    )
+    monkeypatch.setattr(
+        "clawteam.spawn.tmux_backend._inject_prompt_via_buffer",
+        lambda target, agent_name, prompt: injected.append((target, agent_name, prompt)),
+    )
+    monkeypatch.setattr("clawteam.spawn.registry.register_agent", lambda **_: None)
+
+    backend = TmuxBackend()
+    result = backend.spawn(
+        command=["codex"],
+        agent_name="worker1",
+        agent_id="agent-1",
+        agent_type="general-purpose",
+        team_name="demo-team",
+        prompt="do work",
+        cwd="/tmp/demo",
+        skip_permissions=True,
+    )
+
+    assert "spawned" in result
+    assert injected == [("%42", "worker1", "do work")]
+    assert ["tmux", "paste-buffer", "-b", "prompt-worker1", "-t", "clawteam-demo-team:worker1"] not in run_calls
+
+
+def test_tmux_backend_returns_error_when_post_launch_injection_fails(monkeypatch, tmp_path):
+    from clawteam.config import ClawTeamConfig
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    clawteam_bin = tmp_path / "venv" / "bin" / "clawteam"
+    clawteam_bin.parent.mkdir(parents=True)
+    clawteam_bin.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(sys, "argv", [str(clawteam_bin)])
+
+    class Result:
+        def __init__(self, returncode: int = 0, stdout: str = ""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(args, **kwargs):
+        if args[:3] == ["tmux", "has-session", "-t"]:
+            return Result(returncode=1)
+        if args[:3] == ["tmux", "list-panes", "-t"]:
+            return Result(returncode=0, stdout="9876\n")
+        if args[:4] == ["tmux", "display-message", "-p", "-t"]:
+            return Result(returncode=0, stdout="%42\n")
+        return Result(returncode=0)
+
+    def fake_which(name, path=None):
+        if name == "tmux":
+            return "/usr/bin/tmux"
+        if name == "codex":
+            return "/usr/bin/codex"
+        return None
+
+    def raise_injection_failure(target, agent_name, prompt):
+        raise RuntimeError("tmux paste-buffer failed (exit 1): can't find session")
+
+    monkeypatch.setattr("clawteam.config.load_config", lambda: ClawTeamConfig())
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.shutil.which", fake_which)
+    monkeypatch.setattr("clawteam.spawn.command_validation.shutil.which", fake_which)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "clawteam.spawn.tmux_backend._confirm_workspace_trust_if_prompted",
+        lambda *_, **__: False,
+    )
+    monkeypatch.setattr(
+        "clawteam.spawn.tmux_backend._dismiss_codex_update_prompt_if_present",
+        lambda *_, **__: False,
+    )
+    monkeypatch.setattr(
+        "clawteam.spawn.tmux_backend._wait_for_cli_ready",
+        lambda *_, **__: True,
+    )
+    monkeypatch.setattr("clawteam.spawn.tmux_backend._inject_prompt_via_buffer", raise_injection_failure)
+    monkeypatch.setattr("clawteam.spawn.registry.register_agent", lambda **_: None)
+
+    backend = TmuxBackend()
+    result = backend.spawn(
+        command=["codex"],
+        agent_name="worker1",
+        agent_id="agent-1",
+        agent_type="general-purpose",
+        team_name="demo-team",
+        prompt="do work",
+        cwd="/tmp/demo",
+        skip_permissions=True,
+    )
+
+    assert result.startswith("Error:")
+    assert "worker1" in result
+    assert "paste-buffer" in result
+    assert "can't find session" in result
+
+
 def test_tmux_backend_returns_error_when_command_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     clawteam_bin = tmp_path / "venv" / "bin" / "clawteam"

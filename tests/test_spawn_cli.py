@@ -29,6 +29,20 @@ class RecordingBackend:
         return []
 
 
+class PartialFailureBackend:
+    def __init__(self):
+        self.calls = []
+
+    def spawn(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs["agent_name"] == "worker-1":
+            return "Error: prompt injection failed for worker-1: can't find session"
+        return f"Agent '{kwargs['agent_name']}' spawned"
+
+    def list_running(self):
+        return []
+
+
 def test_spawn_cli_exits_nonzero_and_rolls_back_failed_member(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
     TeamManager.create_team(
@@ -154,6 +168,37 @@ def test_team_start_errors_on_unknown_team(monkeypatch, tmp_path):
 
     assert result.exit_code == 1
     assert "ghost" in result.output
+
+
+def test_team_start_reports_member_failures_and_skips_watcher(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    TeamManager.create_team(name="broken", leader_name="leader", leader_id="l001")
+    TeamManager.add_member("broken", "worker-1", "w001", agent_type="coder")
+
+    backend = PartialFailureBackend()
+    monkeypatch.setattr("clawteam.spawn.get_backend", lambda _: backend)
+
+    popen_calls = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            popen_calls.append(list(args))
+
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "Popen", FakePopen)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["team", "start", "broken", "--no-workspace"],
+        env={"CLAWTEAM_DATA_DIR": str(tmp_path)},
+    )
+
+    assert result.exit_code == 1
+    assert "worker-1" in result.output
+    assert "prompt injection failed" in result.output
+    assert not any("runtime" in c and "watch" in c for c in popen_calls)
 
 
 def test_team_start_spawns_runtime_watcher_for_leader(monkeypatch, tmp_path):
