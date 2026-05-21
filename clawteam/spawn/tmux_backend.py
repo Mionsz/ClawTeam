@@ -237,8 +237,11 @@ class TmuxBackend(SpawnBackend):
                 "using it with clawteam spawn."
             )
 
+        pane_id = _tmux_pane_id(target)
+        pane_target = pane_id or target
+
         _confirm_workspace_trust_if_prompted(
-            target,
+            pane_target,
             normalized_command,
             timeout_seconds=cfg.spawn_ready_timeout,
         )
@@ -261,7 +264,7 @@ class TmuxBackend(SpawnBackend):
 
         if post_launch_prompt and is_codex_command(normalized_command):
             _dismiss_codex_update_prompt_if_present(
-                target,
+                pane_target,
                 normalized_command,
                 timeout_seconds=pane_ready_timeout,
                 poll_interval_seconds=0.2,
@@ -269,54 +272,25 @@ class TmuxBackend(SpawnBackend):
 
         if post_launch_prompt:
             _wait_for_cli_ready(
-                target,
+                pane_target,
                 timeout_seconds=cfg.spawn_ready_timeout,
                 fallback_delay=cfg.spawn_prompt_delay,
             )
-            _inject_prompt_via_buffer(target, agent_name, post_launch_prompt)
-            subprocess.run(
-                ["tmux", "paste-buffer", "-b", f"prompt-{agent_name}", "-t", target],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            # Claude interactive mode needs Enter twice after paste:
-            # first to confirm the pasted text, second to submit
-            time.sleep(0.5)
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "Enter"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            time.sleep(0.3)
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "Enter"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            # Clean up
-            subprocess.run(
-                ["tmux", "delete-buffer", "-b", f"prompt-{agent_name}"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            try:
+                _inject_prompt_via_buffer(pane_target, agent_name, post_launch_prompt)
+            except RuntimeError as exc:
+                return (
+                    f"Error: failed to inject prompt for agent '{agent_name}' "
+                    f"into tmux target '{pane_target}': {exc}"
+                )
         elif prompt and not is_codex_command(command):
             # Non-claude/non-codex command: append prompt via send-keys
-            _wait_for_tui_ready(target, timeout=cfg.spawn_ready_timeout, fallback_delay=cfg.spawn_prompt_delay)
+            _wait_for_tui_ready(pane_target, timeout=cfg.spawn_ready_timeout, fallback_delay=cfg.spawn_prompt_delay)
             subprocess.run(
-                ["tmux", "send-keys", "-t", target, prompt, "Enter"],
+                ["tmux", "send-keys", "-t", pane_target, prompt, "Enter"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-
-        # Capture pane id (e.g. %42) so future runtime injections target by
-        # stable pane id rather than the user-renamable window name.
-        pane_id = ""
-        pane_id_result = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", target, "#{pane_id}"],
-            capture_output=True, text=True,
-        )
-        if pane_id_result.returncode == 0:
-            pane_id = pane_id_result.stdout.strip()
 
         self._agents[(team_name, agent_name)] = {
             "target": target,
@@ -617,6 +591,17 @@ def _wait_for_tmux_pane(
         time.sleep(poll_interval_seconds)
 
     return False
+
+
+def _tmux_pane_id(target: str) -> str:
+    result = subprocess.run(
+        ["tmux", "display-message", "-p", "-t", target, "#{pane_id}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
 
 
 def _looks_like_workspace_trust_prompt(command: list[str], pane_text: str) -> bool:

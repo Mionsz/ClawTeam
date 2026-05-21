@@ -1260,6 +1260,7 @@ def team_start(
             break
 
     spawned: list[dict[str, str]] = []
+    failures: list[dict[str, str]] = []
     for member in config.members:
         cwd = None
         ws_branch = ""
@@ -1283,26 +1284,31 @@ def team_start(
             isolated_workspace=bool(cwd),
         )
 
-        result = be.spawn(
-            command=cmd,
-            agent_name=member.name,
-            agent_id=member.agent_id,
-            agent_type=member.agent_type,
-            team_name=team,
-            prompt=prompt,
-            env=None,
-            cwd=cwd,
-            skip_permissions=skip_permissions,
-        )
+        try:
+            result = be.spawn(
+                command=cmd,
+                agent_name=member.name,
+                agent_id=member.agent_id,
+                agent_type=member.agent_type,
+                team_name=team,
+                prompt=prompt,
+                env=None,
+                cwd=cwd,
+                skip_permissions=skip_permissions,
+            )
+        except Exception as exc:
+            result = f"Error: failed to spawn agent '{member.name}': {exc}"
         spawned.append({
             "name": member.name,
             "id": member.agent_id,
             "type": member.agent_type,
             "result": result,
         })
+        if result.startswith("Error"):
+            failures.append({"name": member.name, "result": result})
 
     watcher_started = False
-    if watcher and be_name == "tmux" and leader_name:
+    if watcher and be_name == "tmux" and leader_name and not failures:
         import subprocess as _sp
         import sys as _sys
         try:
@@ -1317,23 +1323,32 @@ def team_start(
             pass
 
     out = {
-        "status": "started",
+        "status": "failed" if failures else "started",
         "team": team,
         "backend": be_name,
-        "agents": [{"name": s["name"], "id": s["id"], "type": s["type"]} for s in spawned],
+        "agents": [
+            {"name": s["name"], "id": s["id"], "type": s["type"], "result": s["result"]}
+            for s in spawned
+        ],
+        "failures": failures,
         "watcherStarted": watcher_started,
     }
 
     def _human(_data):
-        console.print(f"\n[green bold]Team '{team}' started[/green bold]\n")
+        if failures:
+            console.print(f"\n[red bold]Team '{team}' failed to start all agents[/red bold]\n")
+        else:
+            console.print(f"\n[green bold]Team '{team}' started[/green bold]\n")
         table = Table(title="Agents")
         table.add_column("Name", style="cyan")
         table.add_column("Type")
         table.add_column("ID", style="dim")
+        table.add_column("Result")
         for s in spawned:
-            table.add_row(s["name"], s["type"], s["id"])
+            style = "red" if s["result"].startswith("Error") else "green"
+            table.add_row(s["name"], s["type"], s["id"], f"[{style}]{s['result']}[/{style}]")
         console.print(table)
-        if be_name == "tmux":
+        if be_name == "tmux" and not failures:
             console.print(f"\n[bold]Attach:[/bold] tmux attach -t clawteam-{team}")
         if watcher_started:
             console.print(
@@ -1342,6 +1357,8 @@ def team_start(
             )
 
     _output(out, _human)
+    if failures:
+        raise typer.Exit(1)
 
 
 @team_app.command("discover")
