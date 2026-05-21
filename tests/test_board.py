@@ -430,8 +430,9 @@ def test_patch_task_updates_status(monkeypatch, tmp_path: Path):
     store = TaskStore("ptest")
     task = store.create(subject="Drag me")
 
-    from clawteam.board.server import BoardHandler
     from unittest.mock import MagicMock
+
+    from clawteam.board.server import BoardHandler
     handler = MagicMock(spec=BoardHandler)
     handler.path = f"/api/team/ptest/task/{task.id}"
 

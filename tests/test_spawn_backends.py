@@ -194,7 +194,8 @@ def test_tmux_backend_exports_spawn_path_for_agent_commands(monkeypatch, tmp_pat
     env_file_match = _re.search(r"\.\s+(?:'([^']*/clawteam-env-[^']+\.env\.sh)'|([^\s;]*/clawteam-env-[^;\s]+\.env\.sh))", full_cmd)
     assert env_file_match, f"env source command not found in: {full_cmd}"
     env_file_path = env_file_match.group(1) or env_file_match.group(2)
-    env_file_content = open(env_file_path).read()
+    with open(env_file_path) as _env_fh:
+        env_file_content = _env_fh.read()
     # PATH should contain the clawteam bin directory
     assert any(str(clawteam_bin.parent) in line for line in env_file_content.splitlines() if line.startswith("export PATH="))
     assert any(str(clawteam_bin) in line for line in env_file_content.splitlines() if line.startswith("export CLAWTEAM_BIN="))
@@ -1687,7 +1688,7 @@ def test_subprocess_backend_qwen_skip_permissions_and_prompt(monkeypatch, tmp_pa
         skip_permissions=True,
     )
 
-    assert "qwen --dangerously-skip-permissions -p 'refactor this'" in captured["cmd"]
+    assert "qwen --yolo -p 'refactor this'" in captured["cmd"]
 
 
 def test_subprocess_backend_opencode_skip_permissions_and_prompt(monkeypatch, tmp_path):

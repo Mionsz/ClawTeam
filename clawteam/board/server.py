@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 from clawteam.board.collector import BoardCollector
 from clawteam.paths import validate_identifier
@@ -183,6 +184,7 @@ class BoardHandler(BaseHTTPRequestHandler):
                 return
             self._serve_sse(team_name)
         elif path.startswith("/api/proxy"):
+            import urllib.request
             from urllib.parse import parse_qs, urlparse
             query = parse_qs(urlparse(self.path).query)
             target_url = query.get("url", [""])[0]
@@ -190,12 +192,28 @@ class BoardHandler(BaseHTTPRequestHandler):
                 self.send_error(400, "URL required")
                 return
             try:
-                content = _fetch_proxy_content(target_url)
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(content)
+                # If github URL, convert to api.github.com/repos/.../readme
+                if "github.com" in target_url and "raw.githubusercontent.com" not in target_url:
+                    parsed = urlparse(target_url)
+                    parts = [p for p in parsed.path.split("/") if p]
+                    if len(parts) == 2:
+                        api_url = f"https://api.github.com/repos/{parts[0]}/{parts[1]}/readme"
+                        req = urllib.request.Request(api_url, headers={"User-Agent": "ClawTeam-Server"})
+                        with urllib.request.urlopen(req) as resp:
+                            import json
+                            data = json.loads(resp.read().decode())
+                            target_url = data.get("download_url", target_url)
+                    else:
+                        target_url = target_url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+
+                req = urllib.request.Request(target_url, headers={"User-Agent": "ClawTeam-Server"})
+                with urllib.request.urlopen(req) as resp:
+                    content = resp.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(content)
             except Exception as e:
                 self.send_error(500, str(e))
         elif path.startswith("/assets/"):
@@ -227,9 +245,9 @@ class BoardHandler(BaseHTTPRequestHandler):
                 if raw is None:
                     return
                 try:
-                    payload = json.loads(raw)
-                    from clawteam.team.tasks import TaskStore
+                    payload = json.loads(body)
                     from clawteam.team.models import TaskPriority
+                    from clawteam.team.tasks import TaskStore
                     store = TaskStore(team_name)
                     priority_val = payload.get("priority")
                     task = store.create(
@@ -307,9 +325,9 @@ class BoardHandler(BaseHTTPRequestHandler):
             if raw is None:
                 return
             try:
-                payload = json.loads(raw)
+                payload = json.loads(body)
+                from clawteam.team.models import TaskPriority, TaskStatus
                 from clawteam.team.tasks import TaskStore
-                from clawteam.team.models import TaskStatus, TaskPriority
                 store = TaskStore(team_name)
                 kwargs = {}
                 if "status" in payload:
